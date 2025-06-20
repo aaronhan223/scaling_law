@@ -150,6 +150,7 @@ class ScalingLawExperiment:
             wandb_run_name=wandb_run_name,
             device=self.config.device,
             compute_tracker=compute_tracker,
+            use_multi_gpu=self.config.multi_gpu,
         )
         
         # Train model

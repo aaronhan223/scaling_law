@@ -90,8 +90,11 @@ def save_checkpoint(
     """Save training checkpoint."""
     os.makedirs(save_dir, exist_ok=True)
     
+    # Handle DataParallel models
+    model_to_save = model.module if hasattr(model, 'module') else model
+    
     checkpoint = {
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": model_to_save.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "step": step,
         "best_loss": best_loss,
@@ -123,7 +126,9 @@ def load_checkpoint(
     """Load training checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location=map_location)
     
-    model.load_state_dict(checkpoint["model_state_dict"])
+    # Handle DataParallel models
+    model_to_load = model.module if hasattr(model, 'module') else model
+    model_to_load.load_state_dict(checkpoint["model_state_dict"])
     
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

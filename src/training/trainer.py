@@ -44,6 +44,7 @@ class Trainer:
         wandb_run_name: Optional[str] = None,
         device: str = "cuda",
         compute_tracker: Optional[Any] = None,
+        use_multi_gpu: bool = True,
     ):
         self.model = model
         self.train_dataloader = train_dataloader
@@ -68,11 +69,32 @@ class Trainer:
         self.output_dir = output_dir
         self.experiment_name = experiment_name
         self.use_wandb = use_wandb
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.compute_tracker = compute_tracker
+        self.use_multi_gpu = use_multi_gpu
         
-        # Move model to device
-        self.model.to(self.device)
+        # Device and multi-GPU setup
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.n_gpu = torch.cuda.device_count()
+        
+        # Log GPU information
+        if torch.cuda.is_available():
+            print(f"Using device: {self.device}")
+            print(f"Number of GPUs available: {self.n_gpu}")
+            if self.n_gpu > 0:
+                for i in range(self.n_gpu):
+                    gpu_name = torch.cuda.get_device_name(i)
+                    print(f"  GPU {i}: {gpu_name}")
+        
+        # Move model to device(s)
+        if self.use_multi_gpu and self.n_gpu > 1:
+            print(f"Using DataParallel with {self.n_gpu} GPUs")
+            self.model = nn.DataParallel(self.model)
+            self.model.to(self.device)
+            # Store reference to underlying model for accessing methods
+            self._base_model = self.model.module
+        else:
+            self.model.to(self.device)
+            self._base_model = self.model
         
         # Initialize optimizer and scheduler
         self.optimizer = get_optimizer(
@@ -95,20 +117,24 @@ class Trainer:
         
         # Initialize wandb
         if use_wandb and wandb_project:
+            wandb_config = {
+                "model_config": self._base_model.config if hasattr(self._base_model, "config") else {},
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "max_steps": max_steps,
+                "warmup_steps": warmup_steps,
+                "batch_size": train_dataloader.batch_size,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
+                "fp16": fp16,
+                "num_parameters": self._base_model.get_num_params(),
+                "num_gpus": self.n_gpu if self.use_multi_gpu else 1,
+                "multi_gpu": self.use_multi_gpu and self.n_gpu > 1,
+            }
+            
             wandb.init(
                 project=wandb_project,
                 name=wandb_run_name or experiment_name,
-                config={
-                    "model_config": self.model.config if hasattr(self.model, "config") else {},
-                    "learning_rate": learning_rate,
-                    "weight_decay": weight_decay,
-                    "max_steps": max_steps,
-                    "warmup_steps": warmup_steps,
-                    "batch_size": train_dataloader.batch_size,
-                    "gradient_accumulation_steps": gradient_accumulation_steps,
-                    "fp16": fp16,
-                    "num_parameters": self.model.get_num_params(),
-                }
+                config=wandb_config
             )
             wandb.watch(self.model, log="gradients", log_freq=100)
         
@@ -151,6 +177,10 @@ class Trainer:
             else:
                 outputs = self.model(**batch)
                 loss = outputs["loss"]
+            
+            # Ensure loss is scalar (important for multi-GPU training)
+            if loss.dim() > 0:
+                loss = loss.mean()
             
             # Scale loss for gradient accumulation
             loss = loss / self.gradient_accumulation_steps
@@ -317,6 +347,11 @@ class Trainer:
                 outputs = self.model(**batch)
             
             loss = outputs["loss"]
+            
+            # Ensure loss is scalar (important for multi-GPU training)
+            if loss.dim() > 0:
+                loss = loss.mean()
+            
             batch_size, seq_length = batch["input_ids"].shape
             num_tokens = batch_size * seq_length
             

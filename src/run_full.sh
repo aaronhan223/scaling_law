@@ -5,7 +5,7 @@
 # This will run 72 total experiments (36 standard + 36 transformed)
 
 echo "=========================================="
-echo "COMPREHENSIVE SCALING LAW EXPERIMENTS"
+echo "COMPREHENSIVE SCALING LAW EXPERIMENTS (SINGLE GPU)"
 echo "=========================================="
 echo ""
 echo "This script will run:"
@@ -23,21 +23,28 @@ echo "  5: ~775M params (1536 hidden, 36 layers, 16 heads)"
 echo ""
 echo "Dataset sizes: 1M, 3M, 10M, 30M, 100M, 300M tokens"
 echo ""
+
+# Single GPU configuration
+GPU_DEVICE="${GPU_DEVICE:-0}"  # Default to GPU 0, override with environment variable
+echo "Using GPU: $GPU_DEVICE"
+echo "To use a different GPU, run: GPU_DEVICE=2 ./run_full.sh"
+echo ""
 echo "Expected total runtime: 6-12 hours (depending on hardware)"
 echo "=========================================="
 echo ""
 
 echo "Starting comprehensive scaling law experiments..."
 
-python main.py \
+CUDA_VISIBLE_DEVICES=$GPU_DEVICE python main.py \
     --experiment-name scaling_laws_full_comprehensive \
     --model-sizes 0,1,2,3,4,5 \
     --dataset-sizes 1M,3M,10M,30M,100M,300M \
     --wandb-project scaling-laws-comprehensive \
-    --batch-size 32 \
+    --batch-size 4 \
     --eval-steps 500 \
     --warmup-steps 1000 \
-    --learning-rate 5e-4
+    --learning-rate 5e-4 \
+    --no-multi-gpu
 
 echo ""
 echo "=========================================="

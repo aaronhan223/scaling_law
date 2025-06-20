@@ -5,7 +5,7 @@
 # Good for validating the experimental setup before running full experiments
 
 echo "=========================================="
-echo "QUICK SCALING LAW TEST"
+echo "QUICK SCALING LAW TEST (SINGLE GPU)"
 echo "=========================================="
 echo ""
 echo "This is a reduced-scope test that runs:"
@@ -23,11 +23,15 @@ echo "  5: ~775M params (1536 hidden, 36 layers, 16 heads)"
 echo ""
 echo "Dataset sizes (reduced): 100K, 300K, 1M, 3M, 10M, 30M tokens"
 echo ""
+
+# Single GPU configuration
+GPU_DEVICE="${GPU_DEVICE:-0}"  # Default to GPU 0
+echo "Using GPU: $GPU_DEVICE"
 echo "Expected total runtime: 2-4 hours (depending on hardware)"
 echo "=========================================="
 echo ""
 
-python main.py \
+CUDA_VISIBLE_DEVICES=$GPU_DEVICE python main.py \
     --experiment-name scaling_laws_quick_test \
     --model-sizes 0,1,2,3,4,5 \
     --dataset-sizes 100K,300K,1M,3M,10M,30M \
@@ -35,7 +39,8 @@ python main.py \
     --batch-size 32 \
     --eval-steps 200 \
     --warmup-steps 500 \
-    --learning-rate 5e-4
+    --learning-rate 5e-4 \
+    --no-multi-gpu
 
 echo ""
 echo "=========================================="

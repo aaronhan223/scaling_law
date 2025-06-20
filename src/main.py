@@ -139,6 +139,17 @@ def parse_args():
         action="store_true",
         help="Disable mixed precision training",
     )
+    parser.add_argument(
+        "--multi-gpu",
+        action="store_true",
+        default=True,
+        help="Use multiple GPUs if available",
+    )
+    parser.add_argument(
+        "--no-multi-gpu",
+        action="store_true",
+        help="Disable multi-GPU training even if multiple GPUs are available",
+    )
     
     # Other settings
     parser.add_argument(
@@ -244,6 +255,7 @@ def main():
     config.wandb_project = args.wandb_project
     config.wandb_entity = args.wandb_entity
     config.device = args.device
+    config.multi_gpu = args.multi_gpu and not args.no_multi_gpu
     
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

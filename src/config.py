@@ -161,6 +161,7 @@ class ExperimentConfig:
     # Compute tracking
     track_compute: bool = True
     device: str = "cuda"
+    multi_gpu: bool = True
     
     # Reproducibility
     deterministic: bool = True

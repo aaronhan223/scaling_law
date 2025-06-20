@@ -5,7 +5,7 @@
 # This will run 98 total experiments (49 standard + 49 transformed)
 
 echo "=========================================="
-echo "EXTENSIVE SCALING LAW EXPERIMENTS"
+echo "EXTENSIVE SCALING LAW EXPERIMENTS (SINGLE GPU)"
 echo "=========================================="
 echo ""
 echo "This script will run the most comprehensive experiments:"
@@ -24,6 +24,12 @@ echo "  6: ~1.5B params (2048 hidden, 48 layers, 32 heads)"
 echo ""
 echo "Dataset sizes: 1M, 3M, 10M, 30M, 100M, 300M, 1B tokens"
 echo ""
+
+# Single GPU configuration
+GPU_DEVICE="${GPU_DEVICE:-0}"  # Default to GPU 0
+echo "Using GPU: $GPU_DEVICE"
+echo "To use a different GPU, run: GPU_DEVICE=2 ./run_extensive.sh"
+echo ""
 echo "Expected total runtime: 12-24 hours (depending on hardware)"
 echo "WARNING: This will require significant compute resources!"
 echo "=========================================="
@@ -40,7 +46,7 @@ fi
 echo "Starting extensive scaling law experiments..."
 echo "This may take 12-24 hours to complete."
 
-python main.py \
+CUDA_VISIBLE_DEVICES=$GPU_DEVICE python main.py \
     --experiment-name scaling_laws_extensive \
     --model-sizes 0,1,2,3,4,5,6 \
     --dataset-sizes 1M,3M,10M,30M,100M,300M,1B \
@@ -48,7 +54,8 @@ python main.py \
     --batch-size 32 \
     --eval-steps 500 \
     --warmup-steps 1000 \
-    --learning-rate 5e-4
+    --learning-rate 5e-4 \
+    --no-multi-gpu
 
 echo ""
 echo "=========================================="
