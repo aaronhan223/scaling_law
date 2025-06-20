@@ -8,10 +8,11 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
 from tqdm import tqdm
 
-from ..config import ExperimentConfig
-from ..data import WikiTextDataset, create_dataloaders, create_transformed_dataloaders
-from ..models import create_model
-from ..training import Trainer, set_seed
+from config import ExperimentConfig
+from data import WikiTextDataset, create_dataloaders
+from data.transforms import create_transformed_dataloaders
+from models import create_model
+from training import Trainer, set_seed
 from .compute_tracker import ComputeTracker
 
 
