@@ -49,48 +49,22 @@ src/
 
 ## Running Experiments
 
-### Quick Start
+### Available Scripts
+- `run_full_multi_gpu.sh` - Comprehensive experiments using multiple GPUs
 
-For a comprehensive test that validates the experimental setup:
+### GPU Selection
+
+By default, multi-GPU scripts use GPUs 0 and 1. To use different GPUs:
+
 ```bash
-./run_quick_test.sh
-```
-This runs 72 experiments (6 model sizes × 6 dataset sizes × 2 experiment types) with smaller datasets for faster execution (~2-4 hours).
+# Use GPUs 2 and 3
+GPU_DEVICES=2,3 ./run_full_multi_gpu.sh
 
-### Comprehensive Experiments
+# Use all 4 GPUs
+GPU_DEVICES=0,1,2,3 ./run_full_multi_gpu.sh
 
-#### Standard Scaling Laws Only
-```bash
-./run_standard.sh
-```
-Runs 36 experiments testing standard scaling laws (6 model sizes × 6 dataset sizes).
-
-#### Transformed Data Experiments Only
-```bash
-./run_transform.sh
-```
-Runs 36 experiments testing scaling laws under data transformations (6 model sizes × 6 dataset sizes).
-
-#### Full Experiments (Recommended)
-```bash
-./run_full.sh
-```
-Runs 72 experiments covering both standard and transformed data scaling laws (~6-12 hours).
-
-#### Extensive Experiments (Maximum Coverage)
-```bash
-./run_extensive.sh
-```
-Runs 98 experiments with all 7 model sizes and 7 dataset sizes (~12-24 hours).
-
-### Custom Experiments
-
-Run specific configurations:
-```bash
-python main.py \
-    --model-sizes 0,1,2,3,4,5 \
-    --dataset-sizes 1M,3M,10M,30M,100M,300M \
-    --wandb-project my-scaling-laws
+# Use only GPU 1 and 3
+GPU_DEVICES=1,3 ./run_quick_test_multi_gpu.sh
 ```
 
 ### Command Line Options
@@ -200,22 +174,9 @@ To add new experiments:
 4. **New metrics**: Update `training/trainer.py`
 5. **Custom scaling ranges**: Modify configurations in `config.py`
 
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{kaplan2020scaling,
-  title={Scaling laws for neural language models},
-  author={Kaplan, Jared and McCandlish, Sam and Henighan, Tom and Brown, Tom B and Chess, Benjamin and Child, Rewon and Gray, Scott and Radford, Alec and Wu, Jeffrey and Amodei, Dario},
-  journal={arXiv preprint arXiv:2001.08361},
-  year={2020}
-}
-```
-
 ## Notes
 
-- The experiments are compute-intensive. Start with `run_quick_test.sh` to validate your setup.
+- The experiments are compute-intensive. 
 - Use GPU acceleration and mixed precision training for optimal performance.
 - The largest models require significant GPU memory (16+ GB recommended).
 - Results improve with more scaling points - use at least 6 points per dimension for robust power law fitting.
