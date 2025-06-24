@@ -254,8 +254,6 @@ def main():
     config.use_wandb = not args.no_wandb
     config.wandb_project = args.wandb_project
     config.wandb_entity = args.wandb_entity
-    config.device = args.device
-    config.multi_gpu = args.multi_gpu and not args.no_multi_gpu
     
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

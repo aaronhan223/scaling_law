@@ -23,6 +23,7 @@ class ScalingLawExperiment:
         """Initialize experiment with configuration."""
         self.config = config
         self.results = []
+        self.dataset_cache = {}  # Cache for loaded datasets
         
         # Set seeds
         set_seed(
@@ -30,33 +31,17 @@ class ScalingLawExperiment:
             deterministic=self.config.deterministic
         )
         
-    def run_single_experiment(
+    def _get_or_create_datasets(
         self,
-        model_config: Dict[str, Any],
         dataset_size: int,
-        experiment_type: str = "standard",
-    ) -> Dict[str, Any]:
-        """Run a single training experiment."""
-        print(f"\n{'='*60}")
-        print(f"Running {experiment_type} experiment:")
-        print(f"Model: {model_config['model_name']} ({model_config['num_parameters']:,} params)")
-        print(f"Dataset size: {dataset_size:,} tokens")
-        print(f"{'='*60}\n")
-        
-        # Create datasets
-        if experiment_type == "standard":
-            train_loader, valid_loader, test_loader = create_dataloaders(
-                tokenizer_name=self.config.data_config.tokenizer_name,
-                max_length=self.config.data_config.max_length,
-                train_batch_size=self.config.data_config.train_batch_size,
-                eval_batch_size=self.config.data_config.eval_batch_size,
-                max_tokens_train=dataset_size,
-                max_tokens_valid=min(dataset_size // 10, int(1e6)),  # 10% or 1M tokens
-                num_workers=self.config.data_config.num_workers,
-                seed=self.config.training_config.seed,
-            )
-        else:  # transformed
-            # First create base datasets
+        cache_key: Optional[str] = None
+    ) -> Tuple[WikiTextDataset, WikiTextDataset, WikiTextDataset]:
+        """Get datasets from cache or create new ones."""
+        if cache_key is None:
+            cache_key = f"size_{dataset_size}"
+            
+        if cache_key not in self.dataset_cache:
+            print(f"Creating datasets for {dataset_size:,} tokens...")
             train_dataset = WikiTextDataset(
                 split="train",
                 tokenizer_name=self.config.data_config.tokenizer_name,
@@ -78,22 +63,88 @@ class ScalingLawExperiment:
                 max_tokens=min(dataset_size // 10, int(1e6)),
                 seed=self.config.training_config.seed,
             )
+            self.dataset_cache[cache_key] = (train_dataset, valid_dataset, test_dataset)
+        else:
+            print(f"Using cached datasets for {dataset_size:,} tokens...")
             
-            # Create transformed dataloaders
-            train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
-                base_train_dataset=train_dataset,
-                base_valid_dataset=valid_dataset,
-                base_test_dataset=test_dataset,
-                vocab_size=self.config.model_config.vocab_size,
+        return self.dataset_cache[cache_key]
+        
+    def run_single_experiment(
+        self,
+        model_config: Dict[str, Any],
+        dataset_size: int,
+        experiment_type: str = "standard",
+    ) -> Dict[str, Any]:
+        """Run a single training experiment."""
+        print(f"\n{'='*60}")
+        print(f"Running {experiment_type} experiment:")
+        print(f"Model: {model_config['model_name']} ({model_config['num_parameters']:,} params)")
+        print(f"Dataset size: {dataset_size:,} tokens")
+        print(f"{'='*60}\n")
+        
+        # Create or get cached datasets
+        if experiment_type == "standard" and self.config.use_standard_dataloader_optimization:
+            # Use optimized dataloader creation for standard experiments
+            train_loader, valid_loader, test_loader = create_dataloaders(
+                tokenizer_name=self.config.data_config.tokenizer_name,
+                max_length=self.config.data_config.max_length,
                 train_batch_size=self.config.data_config.train_batch_size,
                 eval_batch_size=self.config.data_config.eval_batch_size,
+                max_tokens_train=dataset_size,
+                max_tokens_valid=min(dataset_size // 10, int(1e6)),  # 10% or 1M tokens
                 num_workers=self.config.data_config.num_workers,
-                linear_transform_dim=self.config.transform_config.linear_transform_dim,
-                linear_seed=self.config.transform_config.linear_transform_seed,
-                nonlinear_type=self.config.transform_config.nonlinear_type,
-                nonlinear_scale=self.config.transform_config.nonlinear_scale,
-                nonlinear_seed=self.config.transform_config.nonlinear_seed,
+                seed=self.config.training_config.seed,
             )
+        else:
+            # Get base datasets (from cache if available)
+            train_dataset, valid_dataset, test_dataset = self._get_or_create_datasets(dataset_size)
+            
+            if experiment_type == "standard":
+                # Create standard dataloaders from cached datasets
+                from torch.utils.data import DataLoader
+                
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=self.config.data_config.train_batch_size,
+                    shuffle=True,
+                    num_workers=self.config.data_config.num_workers,
+                    pin_memory=True,
+                    persistent_workers=True if self.config.data_config.num_workers > 0 else False,
+                )
+                
+                valid_loader = DataLoader(
+                    valid_dataset,
+                    batch_size=self.config.data_config.eval_batch_size,
+                    shuffle=False,
+                    num_workers=self.config.data_config.num_workers,
+                    pin_memory=True,
+                    persistent_workers=True if self.config.data_config.num_workers > 0 else False,
+                )
+                
+                test_loader = DataLoader(
+                    test_dataset,
+                    batch_size=self.config.data_config.eval_batch_size,
+                    shuffle=False,
+                    num_workers=self.config.data_config.num_workers,
+                    pin_memory=True,
+                    persistent_workers=True if self.config.data_config.num_workers > 0 else False,
+                )
+            else:  # transformed
+                # Create transformed dataloaders
+                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    linear_transform_dim=self.config.transform_config.linear_transform_dim,
+                    linear_seed=self.config.transform_config.linear_transform_seed,
+                    nonlinear_type=self.config.transform_config.nonlinear_type,
+                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
+                    nonlinear_seed=self.config.transform_config.nonlinear_seed,
+                )
         
         # Create model
         model = create_model(model_config)
@@ -187,6 +238,14 @@ class ScalingLawExperiment:
         model_configs = self.config.model_config.get_model_size_configs()
         dataset_sizes = self.config.data_config.dataset_sizes
         
+        # Pre-cache datasets if running both standard and transformed experiments
+        if self.config.run_standard and self.config.run_transformed:
+            print("\n" + "="*80)
+            print("PRE-CACHING DATASETS FOR EFFICIENCY")
+            print("="*80)
+            for dataset_size in dataset_sizes:
+                self._get_or_create_datasets(dataset_size)
+        
         # Run standard experiments
         if self.config.run_standard:
             print("\n" + "="*80)
@@ -216,26 +275,25 @@ class ScalingLawExperiment:
             print("RUNNING TRANSFORMED EXPERIMENTS")
             print("="*80)
             
-            # Run on subset of configurations
-            selected_model_indices = [0, 2, 4]  # Small, medium, large models
-            selected_dataset_indices = [0, 2, 4]  # Small, medium, large datasets
-            
-            for i in selected_model_indices:
-                if i < len(model_configs):
-                    model_config = model_configs[i]
-                    for j in selected_dataset_indices:
-                        if j < len(dataset_sizes):
-                            dataset_size = dataset_sizes[j]
-                            
-                            result = self.run_single_experiment(
-                                model_config=model_config,
-                                dataset_size=dataset_size,
-                                experiment_type="transformed",
-                            )
-                            self.results.append(result)
-                            
-                            # Save intermediate results
-                            self.save_results()
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="transformed",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
+        # Clear dataset cache to free memory
+        self.dataset_cache.clear()
         
         return self.results
     

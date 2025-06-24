@@ -13,15 +13,15 @@ echo "- Standard experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
 echo "- Transformed experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
 echo "- Total: 72 experiments"
 echo ""
-echo "Model configurations:"
-echo "  0: ~7M params   (128 hidden, 2 layers, 4 heads)"
-echo "  1: ~13M params  (256 hidden, 4 layers, 8 heads)"
-echo "  2: ~39M params  (512 hidden, 6 layers, 8 heads)"
-echo "  3: ~125M params (768 hidden, 12 layers, 12 heads)"
-echo "  4: ~355M params (1024 hidden, 24 layers, 16 heads)"
-echo "  5: ~775M params (1536 hidden, 36 layers, 16 heads)"
+echo "Model configurations (with reduced dataset sizes for memory efficiency):"
+echo "  0: ~700K params  (128 hidden, 2 layers, 4 heads)"
+echo "  1: ~1.3M params  (256 hidden, 4 layers, 8 heads)"
+echo "  2: ~3.9M params  (512 hidden, 6 layers, 8 heads)"
+echo "  3: ~10M params   (512 hidden, 8 layers, 8 heads)"
+echo "  4: ~30M params   (640 hidden, 10 layers, 10 heads)"
+echo "  5: ~125M params  (768 hidden, 12 layers, 12 heads)"
 echo ""
-echo "Dataset sizes: 1M, 3M, 10M, 30M, 100M, 300M tokens"
+echo "Dataset sizes (reduced by 10x): 100K, 300K, 1M, 3M, 10M, 30M tokens"
 echo ""
 
 # Check available GPUs
@@ -40,7 +40,7 @@ echo "Using GPUs: $GPU_DEVICES"
 echo ""
 echo "To use different GPUs, run: GPU_DEVICES=2,3 ./run_full_multi_gpu.sh"
 echo ""
-echo "Expected total runtime: 3-6 hours with 2 GPUs (depending on hardware)"
+echo "Expected total runtime: 2-4 hours with 2 GPUs (6 model sizes, reduced dataset sizes)"
 echo "=========================================="
 echo ""
 
@@ -50,15 +50,14 @@ echo "Starting multi-GPU comprehensive scaling law experiments..."
 # Note: With multi-GPU, we can use larger batch sizes for better efficiency
 CUDA_VISIBLE_DEVICES=$GPU_DEVICES python main.py \
     --experiment-name scaling_laws_full_multi_gpu \
-    --model-sizes 0,1,2,3,4,5 \
-    --dataset-sizes 1M,3M,10M,30M,100M,300M \
-    --wandb-project scaling-laws-comprehensive \
+    --model-sizes 0,1,2,3,4 \
+    --dataset-sizes 100K,300K,1M,3M,10M,30M \
+    --wandb-project scaling-laws-r41 \
     --batch-size 4 \
     --eval-steps 500 \
     --warmup-steps 1000 \
     --learning-rate 5e-4 \
-    --multi-gpu \
-    --no-fp16
+    --multi-gpu 
 
 echo ""
 echo "=========================================="

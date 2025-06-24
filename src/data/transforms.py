@@ -3,9 +3,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from tqdm import tqdm
 
 
 class LinearTransform(nn.Module):
@@ -47,9 +48,28 @@ class LinearTransform(nn.Module):
         else:
             self.projection_matrix = None
             
+        # Precompute combined transformation matrix for efficiency
+        self._precompute_transformation()
+    
+    def _precompute_transformation(self):
+        """Precompute the combined transformation matrix."""
+        with torch.no_grad():
+            if self.projection_matrix is not None:
+                # Combine both transformations into a single matrix
+                self.combined_transform = torch.matmul(self.transform_matrix, self.projection_matrix)
+            else:
+                self.combined_transform = self.transform_matrix.clone()
+            
+            # Normalize rows to create a valid token mapping
+            # Apply softmax to get probability distribution over output tokens
+            self.token_mapping_probs = F.softmax(self.combined_transform, dim=1)
+            
+            # Create deterministic mapping by taking argmax
+            self.token_mapping = torch.argmax(self.token_mapping_probs, dim=1)
+            
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
-        Apply linear transformation to token IDs.
+        Apply linear transformation to token IDs using efficient lookup.
         
         Args:
             token_ids: Tensor of token IDs
@@ -57,20 +77,33 @@ class LinearTransform(nn.Module):
         Returns:
             Transformed token IDs
         """
-        # Convert token IDs to one-hot
-        one_hot = F.one_hot(token_ids, num_classes=self.vocab_size).float()
+        # Ensure input token IDs are within valid range
+        token_ids = torch.clamp(token_ids, 0, self.vocab_size - 1)
         
-        # Apply transformation
-        transformed = torch.matmul(one_hot, self.transform_matrix)
-        
-        # Project back if needed
-        if self.projection_matrix is not None:
-            transformed = torch.matmul(transformed, self.projection_matrix)
-        
-        # Convert back to token IDs by taking argmax
-        transformed_ids = torch.argmax(transformed, dim=-1)
+        # Use direct lookup instead of matrix multiplication
+        transformed_ids = self.token_mapping[token_ids]
         
         return transformed_ids
+    
+    def forward_batch(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Optimized batch transformation.
+        
+        Args:
+            token_ids: Batch tensor of token IDs
+            
+        Returns:
+            Transformed token IDs
+        """
+        # Flatten for efficient lookup
+        original_shape = token_ids.shape
+        flat_ids = token_ids.flatten()
+        
+        # Transform using lookup
+        flat_transformed = self.token_mapping[flat_ids]
+        
+        # Restore original shape
+        return flat_transformed.view(original_shape)
     
     def transform_embeddings(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
@@ -133,9 +166,28 @@ class NonLinearTransform(nn.Module):
         else:
             raise ValueError(f"Unknown nonlinear_type: {nonlinear_type}")
             
+        # Precompute token mapping
+        self._precompute_mapping()
+    
+    def _precompute_mapping(self):
+        """Precompute the nonlinear token mapping."""
+        with torch.no_grad():
+            # Create identity matrix for one-hot representation
+            eye = torch.eye(self.vocab_size)
+            
+            # Apply transformations
+            transformed = eye * self.scale_factor + self.shift
+            transformed = self.nonlinearity(transformed)
+            
+            # Normalize to get valid probability distribution
+            transformed = F.softmax(transformed, dim=1)
+            
+            # Create deterministic mapping
+            self.token_mapping = torch.argmax(transformed, dim=1)
+            
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
-        Apply non-linear transformation to token IDs.
+        Apply non-linear transformation to token IDs using lookup.
         
         Args:
             token_ids: Tensor of token IDs
@@ -143,22 +195,33 @@ class NonLinearTransform(nn.Module):
         Returns:
             Transformed token IDs
         """
-        # Convert to one-hot
-        one_hot = F.one_hot(token_ids, num_classes=self.vocab_size).float()
+        # Ensure input token IDs are within valid range
+        token_ids = torch.clamp(token_ids, 0, self.vocab_size - 1)
         
-        # Apply scaling and shifting
-        transformed = one_hot * self.scale_factor + self.shift
-        
-        # Apply non-linearity
-        transformed = self.nonlinearity(transformed)
-        
-        # Normalize to get valid probability distribution
-        transformed = F.softmax(transformed, dim=-1)
-        
-        # Sample from the distribution (or take argmax for deterministic)
-        transformed_ids = torch.argmax(transformed, dim=-1)
+        # Use direct lookup
+        transformed_ids = self.token_mapping[token_ids]
         
         return transformed_ids
+    
+    def forward_batch(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Optimized batch transformation.
+        
+        Args:
+            token_ids: Batch tensor of token IDs
+            
+        Returns:
+            Transformed token IDs
+        """
+        # Flatten for efficient lookup
+        original_shape = token_ids.shape
+        flat_ids = token_ids.flatten()
+        
+        # Transform using lookup
+        flat_transformed = self.token_mapping[flat_ids]
+        
+        # Restore original shape
+        return flat_transformed.view(original_shape)
     
     def transform_embeddings(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
@@ -180,13 +243,15 @@ class NonLinearTransform(nn.Module):
 
 
 class TransformedDataset(Dataset):
-    """Dataset wrapper that applies transformations."""
+    """Dataset wrapper that applies transformations with caching."""
     
     def __init__(
         self,
         base_dataset: Dataset,
         linear_transform: Optional[LinearTransform] = None,
         nonlinear_transform: Optional[NonLinearTransform] = None,
+        cache_transformed: bool = True,
+        batch_size: int = 1000,
     ):
         """
         Initialize transformed dataset.
@@ -195,16 +260,71 @@ class TransformedDataset(Dataset):
             base_dataset: Base dataset to transform
             linear_transform: Linear transformation to apply
             nonlinear_transform: Non-linear transformation to apply
+            cache_transformed: Whether to cache transformed data
+            batch_size: Batch size for transformation (when caching)
         """
         self.base_dataset = base_dataset
         self.linear_transform = linear_transform
         self.nonlinear_transform = nonlinear_transform
+        self.cache_transformed = cache_transformed
+        self.transformed_cache = {}
+        
+        # If caching is enabled, pre-transform all data
+        if cache_transformed and (linear_transform is not None or nonlinear_transform is not None):
+            self._cache_all_transformations(batch_size)
+        
+    def _cache_all_transformations(self, batch_size: int):
+        """Pre-compute and cache all transformations."""
+        print("Pre-computing transformations for faster training...")
+        
+        # Process in batches for efficiency
+        num_samples = len(self.base_dataset)
+        
+        with torch.no_grad():
+            for start_idx in tqdm(range(0, num_samples, batch_size), desc="Caching transformations"):
+                end_idx = min(start_idx + batch_size, num_samples)
+                
+                # Collect batch of examples
+                batch_input_ids = []
+                batch_labels = []
+                
+                for idx in range(start_idx, end_idx):
+                    example = self.base_dataset[idx]
+                    batch_input_ids.append(example["input_ids"])
+                    batch_labels.append(example["labels"])
+                
+                # Stack into tensors
+                batch_input_ids = torch.stack(batch_input_ids)
+                batch_labels = torch.stack(batch_labels)
+                
+                # Apply transformations
+                if self.linear_transform is not None:
+                    batch_input_ids = self.linear_transform.forward_batch(batch_input_ids)
+                    batch_labels = self.linear_transform.forward_batch(batch_labels)
+                    
+                if self.nonlinear_transform is not None:
+                    batch_input_ids = self.nonlinear_transform.forward_batch(batch_input_ids)
+                    batch_labels = self.nonlinear_transform.forward_batch(batch_labels)
+                
+                # Store in cache
+                for i, idx in enumerate(range(start_idx, end_idx)):
+                    self.transformed_cache[idx] = {
+                        "input_ids": batch_input_ids[i],
+                        "labels": batch_labels[i],
+                    }
+        
+        print(f"Cached {len(self.transformed_cache)} transformed examples")
         
     def __len__(self):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
         """Get transformed example."""
+        # If cached, return from cache
+        if idx in self.transformed_cache:
+            return self.transformed_cache[idx]
+        
+        # Otherwise, transform on the fly
         example = self.base_dataset[idx]
         
         # Apply transformations
@@ -259,23 +379,33 @@ def create_transformed_dataloaders(
         seed=nonlinear_seed,
     )
     
-    # Create transformed datasets
+    # Move transformations to CPU for data loading
+    linear_transform = linear_transform.cpu()
+    nonlinear_transform = nonlinear_transform.cpu()
+    
+    # Create transformed datasets with caching enabled
     train_dataset = TransformedDataset(
         base_train_dataset,
         linear_transform=linear_transform,
         nonlinear_transform=nonlinear_transform,
+        cache_transformed=True,
+        batch_size=1000,
     )
     
     valid_dataset = TransformedDataset(
         base_valid_dataset,
         linear_transform=linear_transform,
         nonlinear_transform=nonlinear_transform,
+        cache_transformed=True,
+        batch_size=1000,
     )
     
     test_dataset = TransformedDataset(
         base_test_dataset,
         linear_transform=linear_transform,
         nonlinear_transform=nonlinear_transform,
+        cache_transformed=True,
+        batch_size=1000,
     )
     
     # Create dataloaders
@@ -285,6 +415,7 @@ def create_transformed_dataloaders(
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
     )
     
     valid_loader = DataLoader(
@@ -293,6 +424,7 @@ def create_transformed_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
     )
     
     test_loader = DataLoader(
@@ -301,6 +433,7 @@ def create_transformed_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
     )
     
     return train_loader, valid_loader, test_loader, linear_transform, nonlinear_transform 

@@ -13,6 +13,7 @@ from .utils import (
     get_optimizer, get_scheduler, save_checkpoint,
     load_checkpoint, compute_gradient_norm
 )
+import pdb
 
 
 class Trainer:
@@ -169,6 +170,11 @@ class Trainer:
             # Move batch to device
             batch = {k: v.to(self.device) for k, v in batch.items()}
             
+            # Safety check: ensure token IDs are within valid range
+            if "input_ids" in batch:
+                batch["input_ids"] = torch.clamp(batch["input_ids"], 0, 50256)
+            if "labels" in batch:
+                batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
             # Forward pass
             if self.fp16:
                 with autocast():
@@ -177,24 +183,31 @@ class Trainer:
             else:
                 outputs = self.model(**batch)
                 loss = outputs["loss"]
-            
             # Ensure loss is scalar (important for multi-GPU training)
             if loss.dim() > 0:
                 loss = loss.mean()
-            
             # Scale loss for gradient accumulation
             loss = loss / self.gradient_accumulation_steps
-            
             # Backward pass
             if self.fp16:
                 self.scaler.scale(loss).backward()
             else:
                 loss.backward()
-            
             # Accumulate loss for logging
-            self.train_loss_accumulator += loss.item()
-            self.train_steps_accumulator += 1
-            
+            try:
+                loss_value = loss.item()
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"Warning: Invalid loss detected: {loss_value}")
+                    continue
+                self.train_loss_accumulator += loss_value
+                self.train_steps_accumulator += 1
+            except RuntimeError as e:
+                print(f"Error computing loss: {e}")
+                print(f"Loss tensor: {loss}")
+                print(f"Input IDs range: {batch['input_ids'].min().item()} - {batch['input_ids'].max().item()}")
+                if "labels" in batch:
+                    print(f"Labels range: {batch['labels'].min().item()} - {batch['labels'].max().item()}")
+                raise
             # Update weights
             if (step + 1) % self.gradient_accumulation_steps == 0:
                 if self.fp16:
@@ -339,6 +352,12 @@ class Trainer:
         
         for batch in tqdm(dataloader, desc="Evaluating"):
             batch = {k: v.to(self.device) for k, v in batch.items()}
+            
+            # Safety check: ensure token IDs are within valid range
+            if "input_ids" in batch:
+                batch["input_ids"] = torch.clamp(batch["input_ids"], 0, 50256)
+            if "labels" in batch:
+                batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
             
             if self.fp16:
                 with autocast():

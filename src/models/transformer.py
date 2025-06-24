@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Optional, Tuple, Dict, Any
+import pdb
 
 
 class MultiHeadAttention(nn.Module):
@@ -216,24 +217,27 @@ class TransformerLM(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         batch_size, seq_length = input_ids.size()
         device = input_ids.device
-        
+
         # Get embeddings
         position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
         position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
-        
+
+        # Ensure input_ids are within valid range for embeddings
+        input_ids = torch.clamp(input_ids, 0, self.config["vocab_size"] - 1)
+        position_ids = torch.clamp(position_ids, 0, self.config["max_position_embeddings"] - 1)
+
         word_embeds = self.word_embeddings(input_ids)
         position_embeds = self.position_embeddings(position_ids)
         hidden_states = word_embeds + position_embeds
         hidden_states = self.dropout(hidden_states)
-        
+
         # Create causal mask
         if attention_mask is None:
             attention_mask = self.create_causal_mask(seq_length, device)
-        
         # Apply transformer blocks
         for layer in self.layers:
             hidden_states = layer(hidden_states, attention_mask)
-        
+
         hidden_states = self.final_norm(hidden_states)
         
         # Compute logits
@@ -247,6 +251,9 @@ class TransformerLM(nn.Module):
         
         # Compute loss if labels provided
         if labels is not None:
+            # Ensure labels are within valid range (allow -100 for ignore_index)
+            labels = torch.clamp(labels, -100, self.config["vocab_size"] - 1)
+            
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             loss = F.cross_entropy(

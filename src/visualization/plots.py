@@ -38,7 +38,7 @@ def plot_loss_vs_parameters(
     title: str = "Test Loss vs Model Parameters",
 ) -> plt.Figure:
     """
-    Plot test loss vs number of parameters (similar to Figure 1 in the paper).
+    Plot test loss vs model parameters (similar to Figure 1 in the paper).
     
     Args:
         df: DataFrame with experiment results
@@ -49,58 +49,80 @@ def plot_loss_vs_parameters(
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # Group by dataset size
-    dataset_sizes = sorted(df['dataset_size'].unique())
+    # Check if data is available
+    if len(df) == 0:
+        ax.text(0.5, 0.5, 'No data available', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=14)
+        ax.set_xlabel('Model Parameters')
+        ax.set_ylabel('Test Loss')
+        ax.set_title(title)
+        return fig
     
-    for i, dataset_size in enumerate(dataset_sizes):
-        subset = df[df['dataset_size'] == dataset_size]
+    # Get unique experiment types
+    experiment_types = df['experiment_type'].unique() if 'experiment_type' in df.columns else ['all']
+    
+    for i, exp_type in enumerate(experiment_types):
+        if exp_type == 'all':
+            subset = df
+            label = 'All experiments'
+        else:
+            subset = df[df['experiment_type'] == exp_type]
+            label = exp_type.capitalize()
         
-        # Sort by model parameters
-        subset = subset.sort_values('model_params')
-        
-        # Plot
+        if len(subset) == 0:
+            continue
+            
+        # Plot all points
         ax.loglog(
             subset['model_params'],
             subset['final_loss'],
-            'o-',
+            'o',
             color=colors[i % len(colors)],
-            label=f'{dataset_size/1e6:.0f}M tokens',
-            markersize=8,
-            linewidth=2,
+            markersize=6,
+            alpha=0.6,
+            label=f'{label} (individual)',
         )
         
-        # Fit power law
-        if len(subset) > 2:
-            log_params = np.log10(subset['model_params'].values)
-            log_loss = np.log10(subset['final_loss'].values)
-            slope, intercept, r_value, _, _ = stats.linregress(log_params, log_loss)
-            
-            # Plot fit
-            fit_params = np.logspace(
-                np.log10(subset['model_params'].min()),
-                np.log10(subset['model_params'].max()),
-                100
-            )
-            fit_loss = 10**(slope * np.log10(fit_params) + intercept)
+        # Calculate average loss for each model size
+        avg_loss = subset.groupby('model_params')['final_loss'].mean()
+        
+        if len(avg_loss) > 1:
+            # Plot average trend
             ax.loglog(
-                fit_params,
-                fit_loss,
-                '--',
+                avg_loss.index,
+                avg_loss.values,
+                'o-',
                 color=colors[i % len(colors)],
-                alpha=0.5,
-                linewidth=1,
+                markersize=10,
+                linewidth=2,
+                label=f'{label} (average)',
             )
             
-            # Add power law exponent to legend
-            ax.text(
-                subset['model_params'].iloc[-1] * 1.1,
-                subset['final_loss'].iloc[-1],
-                f'α={-slope:.2f}',
-                fontsize=10,
-                color=colors[i % len(colors)],
-            )
+            # Fit power law to averages
+            if len(avg_loss) > 2:
+                log_params = np.log10(avg_loss.index.values)
+                log_loss = np.log10(avg_loss.values)
+                slope, intercept, r_value, _, _ = stats.linregress(log_params, log_loss)
+                
+                # Plot fit
+                fit_params = np.logspace(
+                    np.log10(avg_loss.index.min()),
+                    np.log10(avg_loss.index.max()),
+                    100
+                )
+                fit_loss = 10**(slope * np.log10(fit_params) + intercept)
+                ax.loglog(
+                    fit_params,
+                    fit_loss,
+                    '--',
+                    color=colors[i % len(colors)],
+                    linewidth=2,
+                    alpha=0.8,
+                    label=f'{label} fit (α={-slope:.3f})',
+                )
     
-    ax.set_xlabel('Number of Parameters')
+    ax.set_xlabel('Model Parameters')
     ax.set_ylabel('Test Loss')
     ax.set_title(title)
     ax.legend(loc='upper right')
@@ -131,59 +153,72 @@ def plot_loss_vs_dataset_size(
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # Group by model size
-    model_names = sorted(df['model_name'].unique())
+    # Check if data is available
+    if len(df) == 0:
+        ax.text(0.5, 0.5, 'No data available', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=14)
+        ax.set_xlabel('Dataset Size (tokens)')
+        ax.set_ylabel('Test Loss')
+        ax.set_title(title)
+        return fig
     
-    for i, model_name in enumerate(model_names):
-        subset = df[df['model_name'] == model_name]
+    # Get unique model sizes (parameters)
+    model_sizes = sorted(df['model_params'].unique()) if 'model_params' in df.columns else []
+    
+    # Plot dashed lines for each model size
+    for i, model_size in enumerate(model_sizes):
+        subset = df[df['model_params'] == model_size]
         
-        # Sort by dataset size
+        if len(subset) == 0:
+            continue
+            
+        # Sort by dataset size for proper line plotting
         subset = subset.sort_values('dataset_size')
         
-        # Get model params for label
-        model_params = subset['model_params'].iloc[0]
-        
-        # Plot
+        # Plot dashed line for this model size
         ax.loglog(
             subset['dataset_size'],
             subset['final_loss'],
-            'o-',
+            '--',
             color=colors[i % len(colors)],
-            label=f'{model_params/1e6:.1f}M params',
-            markersize=8,
             linewidth=2,
+            alpha=0.8,
+            label=f'{model_size:,} params',
         )
         
-        # Fit power law
-        if len(subset) > 2:
-            log_data = np.log10(subset['dataset_size'].values)
-            log_loss = np.log10(subset['final_loss'].values)
-            slope, intercept, r_value, _, _ = stats.linregress(log_data, log_loss)
-            
-            # Plot fit
-            fit_data = np.logspace(
-                np.log10(subset['dataset_size'].min()),
-                np.log10(subset['dataset_size'].max()),
-                100
-            )
-            fit_loss = 10**(slope * np.log10(fit_data) + intercept)
-            ax.loglog(
-                fit_data,
-                fit_loss,
-                '--',
-                color=colors[i % len(colors)],
-                alpha=0.5,
-                linewidth=1,
-            )
-            
-            # Add power law exponent
-            ax.text(
-                subset['dataset_size'].iloc[-1] * 1.1,
-                subset['final_loss'].iloc[-1],
-                f'β={-slope:.2f}',
-                fontsize=10,
-                color=colors[i % len(colors)],
-            )
+        # Plot individual points
+        ax.loglog(
+            subset['dataset_size'],
+            subset['final_loss'],
+            'o',
+            color=colors[i % len(colors)],
+            markersize=6,
+            alpha=0.6,
+        )
+    
+    # Fit power law to all data and plot as solid line
+    if len(df) > 2:
+        log_data = np.log10(df['dataset_size'].values)
+        log_loss = np.log10(df['final_loss'].values)
+        slope, intercept, r_value, _, _ = stats.linregress(log_data, log_loss)
+        
+        # Plot overall fit as solid line
+        fit_data = np.logspace(
+            np.log10(df['dataset_size'].min()),
+            np.log10(df['dataset_size'].max()),
+            100
+        )
+        fit_loss = 10**(slope * np.log10(fit_data) + intercept)
+        ax.loglog(
+            fit_data,
+            fit_loss,
+            '-',
+            color='black',
+            linewidth=3,
+            alpha=0.8,
+            label=f'Overall fit (β={-slope:.3f})',
+        )
     
     ax.set_xlabel('Dataset Size (tokens)')
     ax.set_ylabel('Test Loss')
@@ -205,7 +240,7 @@ def plot_loss_vs_compute(
     title: str = "Test Loss vs Compute",
 ) -> plt.Figure:
     """
-    Plot test loss vs compute (similar to Figure 4 in the paper).
+    Plot test loss vs compute (similar to Figure 1 in the paper).
     
     Args:
         df: DataFrame with experiment results
@@ -216,11 +251,33 @@ def plot_loss_vs_compute(
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
+    # Check if compute data is available
+    if 'petaflop_days' not in df.columns:
+        # Estimate compute from model parameters and dataset size
+        print("Warning: No compute tracking data found. Estimating compute from model parameters and dataset size.")
+        from ..experiments.compute_tracker import estimate_compute_for_model
+        
+        df = df.copy()
+        df['petaflop_days'] = df.apply(
+            lambda row: estimate_compute_for_model(
+                row['model_params'], 
+                row['dataset_size']
+            )['petaflop_days'], 
+            axis=1
+        )
+    
     # Filter for rows with compute data
     df_compute = df[df['petaflop_days'].notna()].copy()
     
     if len(df_compute) == 0:
         print("Warning: No compute data available")
+        # Create an empty plot with a message
+        ax.text(0.5, 0.5, 'No compute data available\nEnable compute tracking in config', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=14)
+        ax.set_xlabel('Compute (PetaFLOP-days)')
+        ax.set_ylabel('Test Loss')
+        ax.set_title(title)
         return fig
     
     # Plot all points
@@ -313,11 +370,33 @@ def plot_optimal_model_size(
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
+    # Check if compute data is available
+    if 'petaflop_days' not in df.columns:
+        # Estimate compute from model parameters and dataset size
+        print("Warning: No compute tracking data found. Estimating compute from model parameters and dataset size.")
+        from ..experiments.compute_tracker import estimate_compute_for_model
+        
+        df = df.copy()
+        df['petaflop_days'] = df.apply(
+            lambda row: estimate_compute_for_model(
+                row['model_params'], 
+                row['dataset_size']
+            )['petaflop_days'], 
+            axis=1
+        )
+    
     # Group by compute budget bins
     df_compute = df[df['petaflop_days'].notna()].copy()
     
     if len(df_compute) == 0:
         print("Warning: No compute data available")
+        # Create an empty plot with a message
+        ax.text(0.5, 0.5, 'No compute data available\nEnable compute tracking in config', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=14)
+        ax.set_xlabel('Compute Budget (PetaFLOP-days)')
+        ax.set_ylabel('Optimal Model Size (parameters)')
+        ax.set_title(title)
         return fig
     
     # Create compute bins

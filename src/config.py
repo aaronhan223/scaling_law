@@ -23,11 +23,11 @@ class ModelConfig:
         # Define model configurations of different sizes
         # Following similar scaling to the paper
         if self.hidden_sizes is None:
-            self.hidden_sizes = [128, 256, 512, 768, 1024, 1536, 2048]
+            self.hidden_sizes = [16, 32, 64, 128, 256, 512, 640, 768, 1024]
         if self.num_attention_heads is None:
-            self.num_attention_heads = [4, 8, 8, 12, 16, 16, 32]
+            self.num_attention_heads = [2, 4, 8, 8, 8, 12, 16, 16, 32]
         if self.num_hidden_layers is None:
-            self.num_hidden_layers = [2, 4, 6, 12, 24, 36, 48]
+            self.num_hidden_layers = [2, 4, 6, 8, 10, 12, 24, 36, 48]
     
     def get_model_size_configs(self):
         """Get configurations for models of different sizes."""
@@ -86,15 +86,15 @@ class DataConfig:
     
     def __post_init__(self):
         if self.dataset_sizes is None:
-            # Dataset sizes in millions of tokens
+            # Dataset sizes in tokens (reduced for memory efficiency)
             # Following exponential scaling
             self.dataset_sizes = [
+                int(1e5),    # 100K tokens
+                int(3e5),    # 300K tokens
                 int(1e6),    # 1M tokens
                 int(3e6),    # 3M tokens
                 int(1e7),    # 10M tokens
                 int(3e7),    # 30M tokens
-                int(1e8),    # 100M tokens
-                int(3e8),    # 300M tokens
             ]
 
 
@@ -160,11 +160,21 @@ class ExperimentConfig:
     
     # Compute tracking
     track_compute: bool = True
-    device: str = "cuda"
-    multi_gpu: bool = True
+    
+    # Dataset caching and optimization
+    use_dataset_cache: bool = True  # Cache datasets between standard and transformed experiments
+    use_standard_dataloader_optimization: bool = False  # Use original create_dataloaders for standard experiments
     
     # Reproducibility
     deterministic: bool = True
+    
+    @property
+    def device(self):
+        return "cuda"
+    
+    @property
+    def multi_gpu(self):
+        return True
     
     def get_output_dir(self, experiment_type: str, model_name: str, dataset_size: int):
         """Get output directory for a specific experiment."""

@@ -7,17 +7,6 @@ This guide explains how to use the multi-GPU training capabilities in the scalin
 The codebase now supports both single-GPU and multi-GPU training using PyTorch's DataParallel. This allows for faster training and the ability to use larger batch sizes for better efficiency.
 
 ## Available Scripts
-
-### Single-GPU Scripts
-- `run_quick_test.sh` - Quick test with small datasets (single GPU)
-- `run_standard.sh` - Standard experiments only (single GPU)
-- `run_transform.sh` - Transformed data experiments only (single GPU)
-- `run_full.sh` - Both standard and transformed experiments (single GPU)
-- `run_extensive.sh` - Most comprehensive experiments with all model sizes (single GPU)
-
-### Multi-GPU Scripts
-- `run_quick_test_multi_gpu.sh` - Quick test using multiple GPUs
-- `run_standard_multi_gpu.sh` - Standard experiments using multiple GPUs
 - `run_full_multi_gpu.sh` - Comprehensive experiments using multiple GPUs
 
 ## GPU Selection
