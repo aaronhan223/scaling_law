@@ -358,30 +358,53 @@ def create_transformed_dataloaders(
     nonlinear_type: str = "tanh",
     nonlinear_scale: float = 0.1,
     nonlinear_seed: int = 43,
+    apply_linear: bool = True,
+    apply_nonlinear: bool = True,
 ) -> tuple:
     """
     Create transformed dataloaders.
+    
+    Args:
+        base_train_dataset: Base training dataset
+        base_valid_dataset: Base validation dataset
+        base_test_dataset: Base test dataset
+        vocab_size: Size of vocabulary
+        train_batch_size: Training batch size
+        eval_batch_size: Evaluation batch size
+        num_workers: Number of data loading workers
+        linear_transform_dim: Dimension of linear transformation
+        linear_seed: Seed for linear transformation
+        nonlinear_type: Type of nonlinear transformation
+        nonlinear_scale: Scale for nonlinear transformation
+        nonlinear_seed: Seed for nonlinear transformation
+        apply_linear: Whether to apply linear transformation
+        apply_nonlinear: Whether to apply nonlinear transformation
     
     Returns:
         Tuple of (train_loader, valid_loader, test_loader, linear_transform, nonlinear_transform)
     """
     # Create transformations
-    linear_transform = LinearTransform(
-        vocab_size=vocab_size,
-        transform_dim=linear_transform_dim,
-        seed=linear_seed,
-    )
+    linear_transform = None
+    nonlinear_transform = None
     
-    nonlinear_transform = NonLinearTransform(
-        vocab_size=vocab_size,
-        nonlinear_type=nonlinear_type,
-        scale=nonlinear_scale,
-        seed=nonlinear_seed,
-    )
+    if apply_linear:
+        linear_transform = LinearTransform(
+            vocab_size=vocab_size,
+            transform_dim=linear_transform_dim,
+            seed=linear_seed,
+        )
+        # Move transformation to CPU for data loading
+        linear_transform = linear_transform.cpu()
     
-    # Move transformations to CPU for data loading
-    linear_transform = linear_transform.cpu()
-    nonlinear_transform = nonlinear_transform.cpu()
+    if apply_nonlinear:
+        nonlinear_transform = NonLinearTransform(
+            vocab_size=vocab_size,
+            nonlinear_type=nonlinear_type,
+            scale=nonlinear_scale,
+            seed=nonlinear_seed,
+        )
+        # Move transformation to CPU for data loading
+        nonlinear_transform = nonlinear_transform.cpu()
     
     # Create transformed datasets with caching enabled
     train_dataset = TransformedDataset(

@@ -497,7 +497,7 @@ def plot_all_scaling_laws(
         )
         plt.close(fig)
     
-    print(f"All plots saved to {output_dir}")
+    print(f"All {experiment_type} plots saved to {output_dir}")
 
 
 def compare_standard_vs_transformed(
@@ -505,25 +505,44 @@ def compare_standard_vs_transformed(
     save_path: Optional[str] = None,
 ) -> plt.Figure:
     """Compare standard vs transformed experiments."""
+    return compare_experiment_types(
+        df, 
+        type1='standard', 
+        type2='transformed',
+        save_path=save_path
+    )
+
+
+def compare_experiment_types(
+    df: pd.DataFrame,
+    type1: str,
+    type2: str,
+    save_path: Optional[str] = None,
+) -> plt.Figure:
+    """Compare two experiment types."""
     colors = setup_plot_style()
     
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     axes = axes.flatten()
     
+    experiment_types = [type1, type2]
+    type_colors = colors[:2]
+    
     # 1. Loss comparison by model size
     ax = axes[0]
-    for exp_type, color in zip(['standard', 'transformed'], colors[:2]):
+    for exp_type, color in zip(experiment_types, type_colors):
         subset = df[df['experiment_type'] == exp_type]
-        model_loss = subset.groupby('model_params')['final_loss'].mean()
-        ax.loglog(
-            model_loss.index,
-            model_loss.values,
-            'o-',
-            color=color,
-            label=exp_type.capitalize(),
-            markersize=8,
-            linewidth=2,
-        )
+        if len(subset) > 0:
+            model_loss = subset.groupby('model_params')['final_loss'].mean()
+            ax.loglog(
+                model_loss.index,
+                model_loss.values,
+                'o-',
+                color=color,
+                label=exp_type.capitalize(),
+                markersize=8,
+                linewidth=2,
+            )
     ax.set_xlabel('Model Parameters')
     ax.set_ylabel('Average Test Loss')
     ax.set_title('Loss by Model Size')
@@ -532,18 +551,19 @@ def compare_standard_vs_transformed(
     
     # 2. Loss comparison by dataset size
     ax = axes[1]
-    for exp_type, color in zip(['standard', 'transformed'], colors[:2]):
+    for exp_type, color in zip(experiment_types, type_colors):
         subset = df[df['experiment_type'] == exp_type]
-        data_loss = subset.groupby('dataset_size')['final_loss'].mean()
-        ax.loglog(
-            data_loss.index,
-            data_loss.values,
-            'o-',
-            color=color,
-            label=exp_type.capitalize(),
-            markersize=8,
-            linewidth=2,
-        )
+        if len(subset) > 0:
+            data_loss = subset.groupby('dataset_size')['final_loss'].mean()
+            ax.loglog(
+                data_loss.index,
+                data_loss.values,
+                'o-',
+                color=color,
+                label=exp_type.capitalize(),
+                markersize=8,
+                linewidth=2,
+            )
     ax.set_xlabel('Dataset Size (tokens)')
     ax.set_ylabel('Average Test Loss')
     ax.set_title('Loss by Dataset Size')
@@ -552,17 +572,19 @@ def compare_standard_vs_transformed(
     
     # 3. Perplexity comparison
     ax = axes[2]
-    for exp_type, color in zip(['standard', 'transformed'], colors[:2]):
+    for exp_type, color in zip(experiment_types, type_colors):
         subset = df[df['experiment_type'] == exp_type]
-        perplexities = subset['final_perplexity'].values
-        ax.hist(
-            perplexities,
-            bins=20,
-            alpha=0.6,
-            color=color,
-            label=exp_type.capitalize(),
-            density=True,
-        )
+        if len(subset) > 0 and 'final_perplexity' in subset.columns:
+            perplexities = subset['final_perplexity'].dropna().values
+            if len(perplexities) > 0:
+                ax.hist(
+                    perplexities,
+                    bins=20,
+                    alpha=0.6,
+                    color=color,
+                    label=exp_type.capitalize(),
+                    density=True,
+                )
     ax.set_xlabel('Final Perplexity')
     ax.set_ylabel('Density')
     ax.set_title('Perplexity Distribution')
@@ -572,28 +594,33 @@ def compare_standard_vs_transformed(
     # 4. Relative performance
     ax = axes[3]
     # Match experiments by model and dataset size
-    standard_df = df[df['experiment_type'] == 'standard'].set_index(['model_name', 'dataset_size'])
-    transformed_df = df[df['experiment_type'] == 'transformed'].set_index(['model_name', 'dataset_size'])
+    df1 = df[df['experiment_type'] == type1].set_index(['model_name', 'dataset_size'])
+    df2 = df[df['experiment_type'] == type2].set_index(['model_name', 'dataset_size'])
     
-    common_indices = standard_df.index.intersection(transformed_df.index)
+    common_indices = df1.index.intersection(df2.index)
     if len(common_indices) > 0:
         relative_loss = []
         model_params = []
         
         for idx in common_indices:
-            std_loss = standard_df.loc[idx, 'final_loss']
-            trans_loss = transformed_df.loc[idx, 'final_loss']
-            relative = (trans_loss - std_loss) / std_loss * 100
+            loss1 = df1.loc[idx, 'final_loss']
+            loss2 = df2.loc[idx, 'final_loss']
+            relative = (loss2 - loss1) / loss1 * 100
             relative_loss.append(relative)
-            model_params.append(standard_df.loc[idx, 'model_params'])
+            model_params.append(df1.loc[idx, 'model_params'])
         
         ax.semilogx(model_params, relative_loss, 'o', color=colors[2], markersize=8)
         ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
         ax.set_xlabel('Model Parameters')
-        ax.set_ylabel('Relative Loss Increase (%)')
-        ax.set_title('Performance Impact of Transformations')
+        ax.set_ylabel(f'Relative Loss Increase (%)\n({type2} vs {type1})')
+        ax.set_title('Performance Impact')
         ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, 'No common experiments to compare', 
+                horizontalalignment='center', verticalalignment='center', 
+                transform=ax.transAxes, fontsize=14)
     
+    plt.suptitle(f'Comparison: {type1.capitalize()} vs {type2.capitalize()}', fontsize=16)
     plt.tight_layout()
     
     if save_path:

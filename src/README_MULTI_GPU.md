@@ -6,8 +6,46 @@ This guide explains how to use the multi-GPU training capabilities in the scalin
 
 The codebase now supports both single-GPU and multi-GPU training using PyTorch's DataParallel. This allows for faster training and the ability to use larger batch sizes for better efficiency.
 
+## Experiment Types
+
+The codebase supports four different experiment types:
+
+1. **Standard**: No transformations applied to the data
+2. **Linear**: Only linear token transformations applied
+3. **Nonlinear**: Only nonlinear token transformations applied  
+4. **Transformed**: Both linear and nonlinear transformations applied (combined)
+
 ## Available Scripts
-- `run_full_multi_gpu.sh` - Comprehensive experiments using multiple GPUs
+
+- `run_test_transforms.sh` - Quick test of all transform types (12 experiments, ~15-30 minutes)
+- `run_full_multi_gpu.sh` - Standard, linear, and nonlinear experiments using multiple GPUs (108 experiments)
+- `run_all_experiments.sh` - Comprehensive experiments with all four types (120 experiments)
+
+### Script Details
+
+#### Quick Test Script (`run_test_transforms.sh`)
+```bash
+./src/run_test_transforms.sh
+```
+- 2 model sizes × 2 dataset sizes × 3 experiment types = 12 experiments
+- Runtime: 15-30 minutes
+- Good for testing the setup and new functionality
+
+#### Multi-GPU Script (`run_full_multi_gpu.sh`)  
+```bash
+./src/run_full_multi_gpu.sh
+```
+- 5 model sizes × 6 dataset sizes × 3 experiment types = 90 experiments
+- Runs: standard, linear, nonlinear (skips combined transformed)
+- Runtime: 3-6 hours with 2 GPUs
+
+#### Comprehensive Script (`run_all_experiments.sh`)
+```bash
+./src/run_all_experiments.sh
+```
+- 5 model sizes × 6 dataset sizes × 4 experiment types = 120 experiments
+- Runs: standard, linear, nonlinear, and combined transformed
+- Runtime: 4-8 hours (depending on GPU configuration)
 
 ## GPU Selection
 
@@ -144,6 +182,68 @@ python main.py \
     --no-multi-gpu       # Disable multi-GPU training
     --device cuda        # Device to use (default: cuda)
 ```
+
+### Experiment Type Options
+
+Control which experiment types to run:
+
+```bash
+python main.py \
+    --run-standard       # Run standard experiments (default: True)
+    --run-transformed    # Run combined transform experiments (default: True)
+    --run-linear         # Run linear transform experiments (default: True)
+    --run-nonlinear      # Run nonlinear transform experiments (default: True)
+    --skip-standard      # Skip standard experiments
+    --skip-transformed   # Skip combined transform experiments  
+    --skip-linear        # Skip linear transform experiments
+    --skip-nonlinear     # Skip nonlinear transform experiments
+```
+
+### Example Usage
+
+```bash
+# Run only standard and linear experiments
+python main.py --run-standard --run-linear --skip-transformed --skip-nonlinear
+
+# Run only nonlinear experiments
+python main.py --run-nonlinear --skip-standard --skip-transformed --skip-linear
+
+# Run all experiment types (default behavior)
+python main.py --run-standard --run-transformed --run-linear --run-nonlinear
+```
+
+## Output Structure
+
+After running experiments, you'll find the following in your output directory:
+
+### Results Files
+- `results/scaling_law_results.json` - Raw results in JSON format
+- `results/scaling_law_results.csv` - Results in CSV format for analysis
+
+### Generated Plots
+
+The system generates separate plots for each experiment type:
+
+#### Individual Experiment Type Plots
+- `standard_loss_vs_parameters.png` - Standard experiments: loss vs model parameters
+- `standard_loss_vs_dataset_size.png` - Standard experiments: loss vs dataset size  
+- `standard_loss_vs_compute.png` - Standard experiments: loss vs compute
+- `standard_optimal_model_size.png` - Standard experiments: optimal model size vs compute
+
+- `linear_*.png` - Same plots for linear transform experiments
+- `nonlinear_*.png` - Same plots for nonlinear transform experiments  
+- `transformed_*.png` - Same plots for combined transform experiments
+
+#### Comparison Plots
+- `comparison.png` - Standard vs Combined transforms comparison
+- `comparison_linear.png` - Standard vs Linear transforms comparison
+- `comparison_nonlinear.png` - Standard vs Nonlinear transforms comparison
+
+Each comparison plot includes:
+1. Loss by model size comparison
+2. Loss by dataset size comparison  
+3. Perplexity distribution comparison
+4. Relative performance impact analysis
 
 ## Best Practices
 

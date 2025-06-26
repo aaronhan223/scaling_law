@@ -10,7 +10,9 @@ from datetime import datetime
 from config import ExperimentConfig
 from experiments import ScalingLawExperiment
 from visualization import plot_all_scaling_laws, compare_standard_vs_transformed
+from visualization.plots import compare_experiment_types
 from training import set_seed
+import pdb
 
 
 def parse_args():
@@ -45,6 +47,28 @@ def parse_args():
         "--skip-transformed",
         action="store_true",
         help="Skip transformed experiments",
+    )
+    parser.add_argument(
+        "--run-linear",
+        action="store_true",
+        default=True,
+        help="Run linear transform experiments",
+    )
+    parser.add_argument(
+        "--run-nonlinear",
+        action="store_true",
+        default=True,
+        help="Run nonlinear transform experiments",
+    )
+    parser.add_argument(
+        "--skip-linear",
+        action="store_true",
+        help="Skip linear transform experiments",
+    )
+    parser.add_argument(
+        "--skip-nonlinear",
+        action="store_true",
+        help="Skip nonlinear transform experiments",
     )
     
     # Model settings
@@ -228,6 +252,8 @@ def main():
     config.experiment_name = args.experiment_name
     config.run_standard = args.run_standard and not args.skip_standard
     config.run_transformed = args.run_transformed and not args.skip_transformed
+    config.run_linear_transform = args.run_linear and not args.skip_linear
+    config.run_nonlinear_transform = args.run_nonlinear and not args.skip_nonlinear
     
     # Parse model and dataset sizes
     if args.model_sizes != "all":
@@ -279,6 +305,8 @@ def main():
     print(f"Dataset sizes: {config.data_config.dataset_sizes}")
     print(f"Run standard: {config.run_standard}")
     print(f"Run transformed: {config.run_transformed}")
+    print(f"Run linear: {config.run_linear_transform}")
+    print(f"Run nonlinear: {config.run_nonlinear_transform}")
     print("=" * 80)
     
     if args.plot_only:
@@ -324,11 +352,37 @@ def main():
             if config.run_transformed:
                 plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="transformed")
             
+            # Generate linear transform plots
+            if config.run_linear_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="linear")
+            
+            # Generate nonlinear transform plots
+            if config.run_nonlinear_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="nonlinear")
+            
             # Compare standard vs transformed
             if config.run_standard and config.run_transformed:
                 compare_standard_vs_transformed(
                     df_results["all"],
                     save_path=os.path.join(plot_dir, "comparison.png")
+                )
+            
+            # Compare standard vs linear
+            if config.run_standard and config.run_linear_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='linear',
+                    save_path=os.path.join(plot_dir, "comparison_linear.png")
+                )
+            
+            # Compare standard vs nonlinear  
+            if config.run_standard and config.run_nonlinear_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='nonlinear',
+                    save_path=os.path.join(plot_dir, "comparison_nonlinear.png")
                 )
             
             print("\n" + "=" * 80)

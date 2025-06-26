@@ -158,6 +158,10 @@ class ExperimentConfig:
     run_standard: bool = True
     run_transformed: bool = True
     
+    # New flags for separate transform experiments
+    run_linear_transform: bool = True
+    run_nonlinear_transform: bool = True
+    
     # Compute tracking
     track_compute: bool = True
     

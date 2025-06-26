@@ -129,8 +129,8 @@ class ScalingLawExperiment:
                     pin_memory=True,
                     persistent_workers=True if self.config.data_config.num_workers > 0 else False,
                 )
-            else:  # transformed
-                # Create transformed dataloaders
+            elif experiment_type == "transformed":
+                # Create transformed dataloaders (both linear and nonlinear)
                 train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
                     base_train_dataset=train_dataset,
                     base_valid_dataset=valid_dataset,
@@ -145,6 +145,44 @@ class ScalingLawExperiment:
                     nonlinear_scale=self.config.transform_config.nonlinear_scale,
                     nonlinear_seed=self.config.transform_config.nonlinear_seed,
                 )
+            elif experiment_type == "linear":
+                # Create dataloaders with only linear transformation
+                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    linear_transform_dim=self.config.transform_config.linear_transform_dim,
+                    linear_seed=self.config.transform_config.linear_transform_seed,
+                    nonlinear_type=self.config.transform_config.nonlinear_type,
+                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
+                    nonlinear_seed=self.config.transform_config.nonlinear_seed,
+                    apply_linear=True,
+                    apply_nonlinear=False,
+                )
+            elif experiment_type == "nonlinear":
+                # Create dataloaders with only nonlinear transformation
+                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    linear_transform_dim=self.config.transform_config.linear_transform_dim,
+                    linear_seed=self.config.transform_config.linear_transform_seed,
+                    nonlinear_type=self.config.transform_config.nonlinear_type,
+                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
+                    nonlinear_seed=self.config.transform_config.nonlinear_seed,
+                    apply_linear=False,
+                    apply_nonlinear=True,
+                )
+            else:
+                raise ValueError(f"Unknown experiment type: {experiment_type}")
         
         # Create model
         model = create_model(model_config)
@@ -238,8 +276,10 @@ class ScalingLawExperiment:
         model_configs = self.config.model_config.get_model_size_configs()
         dataset_sizes = self.config.data_config.dataset_sizes
         
-        # Pre-cache datasets if running both standard and transformed experiments
-        if self.config.run_standard and self.config.run_transformed:
+        # Pre-cache datasets if running multiple experiment types
+        num_experiments = sum([self.config.run_standard, self.config.run_transformed, 
+                             self.config.run_linear_transform, self.config.run_nonlinear_transform])
+        if num_experiments > 1:
             print("\n" + "="*80)
             print("PRE-CACHING DATASETS FOR EFFICIENCY")
             print("="*80)
@@ -292,6 +332,52 @@ class ScalingLawExperiment:
                     # Save intermediate results
                     self.save_results()
         
+        # Run linear transform experiments
+        if self.config.run_linear_transform:
+            print("\n" + "="*80)
+            print("RUNNING LINEAR TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="linear",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
+        # Run nonlinear transform experiments
+        if self.config.run_nonlinear_transform:
+            print("\n" + "="*80)
+            print("RUNNING NONLINEAR TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="nonlinear",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
         # Clear dataset cache to free memory
         self.dataset_cache.clear()
         
@@ -322,12 +408,16 @@ class ScalingLawExperiment:
         
         df = pd.DataFrame(self.results)
         
-        # Separate standard and transformed results
-        standard_df = df[df['experiment_type'] == 'standard'].copy()
-        transformed_df = df[df['experiment_type'] == 'transformed'].copy()
+        # Separate results by experiment type
+        standard_df = df[df['experiment_type'] == 'standard'].copy() if 'standard' in df['experiment_type'].values else pd.DataFrame()
+        transformed_df = df[df['experiment_type'] == 'transformed'].copy() if 'transformed' in df['experiment_type'].values else pd.DataFrame()
+        linear_df = df[df['experiment_type'] == 'linear'].copy() if 'linear' in df['experiment_type'].values else pd.DataFrame()
+        nonlinear_df = df[df['experiment_type'] == 'nonlinear'].copy() if 'nonlinear' in df['experiment_type'].values else pd.DataFrame()
         
         return {
             "all": df,
             "standard": standard_df,
             "transformed": transformed_df,
+            "linear": linear_df,
+            "nonlinear": nonlinear_df,
         } 
