@@ -22,7 +22,7 @@ echo "  3: ~10M params   (512 hidden, 8 layers, 8 heads)"
 echo "  4: ~30M params   (640 hidden, 10 layers, 10 heads)"
 echo "  5: ~125M params  (768 hidden, 12 layers, 12 heads)"
 echo ""
-echo "Dataset sizes (large scale): 1M, 3M, 10M, 30M, 100M, 300M tokens"
+echo "Dataset sizes (very large scale): 10M, 30M, 100M, 300M, 1B, 3B tokens"
 echo ""
 echo "Experiment types:"
 echo "  - Standard: No transformations applied"
@@ -46,7 +46,7 @@ echo "Using GPUs: $GPU_DEVICES"
 echo ""
 echo "To use different GPUs, run: GPU_DEVICES=2,3 ./run_full_multi_gpu.sh"
 echo ""
-echo "Expected total runtime: 8-12 hours with 2 GPUs (5 model sizes, 3 experiment types, larger datasets)"
+echo "Expected total runtime: 24-48 hours with 2 GPUs (5 model sizes, 3 experiment types, very large datasets)"
 echo "=========================================="
 echo ""
 
@@ -58,7 +58,7 @@ echo "Starting multi-GPU comprehensive scaling law experiments..."
 CUDA_VISIBLE_DEVICES=$GPU_DEVICES python main.py \
     --experiment-name scaling_laws_full_multi_gpu \
     --model-sizes 0,1,2,3,4 \
-    --dataset-sizes 1M,3M,10M,30M,100M,300M \
+    --dataset-sizes 3M,10M,30M,100M,300M,1B \
     --wandb-project scaling-laws-r41 \
     --batch-size 4 \
     --eval-steps 500 \
