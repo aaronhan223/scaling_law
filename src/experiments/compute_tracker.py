@@ -1,9 +1,7 @@
 """Compute tracking for scaling law experiments."""
 
 import time
-import torch
-import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class ComputeTracker:

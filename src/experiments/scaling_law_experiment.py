@@ -2,11 +2,10 @@
 
 import os
 import json
-import torch
+from torch.utils.data import DataLoader
 import wandb
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
-from tqdm import tqdm
 
 from config import ExperimentConfig
 from data import WikiTextDataset, create_dataloaders
@@ -101,7 +100,6 @@ class ScalingLawExperiment:
             
             if experiment_type == "standard":
                 # Create standard dataloaders from cached datasets
-                from torch.utils.data import DataLoader
                 
                 train_loader = DataLoader(
                     train_dataset,
