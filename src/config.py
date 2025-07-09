@@ -138,6 +138,28 @@ class TransformConfig:
     nonlinear_type: str = "tanh"  # Options: "tanh", "sigmoid", "relu"
     nonlinear_scale: float = 0.1
     nonlinear_seed: int = 43
+    
+    # Clustering transformation (information-losing)
+    clustering_num_clusters: Optional[int] = None  # Default to vocab_size // 4
+    clustering_embedding_dim: int = 128
+    clustering_seed: int = 44
+    
+    # Modular transformation (information-losing)
+    modular_modulus: Optional[int] = None  # Default to vocab_size // 8
+    modular_seed: int = 45
+    
+    # Quantization transformation (information-losing)
+    quantization_num_levels: Optional[int] = None  # Default to vocab_size // 16
+    quantization_embedding_dim: int = 64
+    quantization_seed: int = 46
+    
+    def get_default_lossy_params(self, vocab_size: int):
+        """Get default parameters for lossy transforms based on vocab size."""
+        return {
+            'clustering_num_clusters': self.clustering_num_clusters or max(vocab_size // 4, 100),
+            'modular_modulus': self.modular_modulus or max(vocab_size // 8, 50),
+            'quantization_num_levels': self.quantization_num_levels or max(vocab_size // 16, 25),
+        }
 
 
 @dataclass
@@ -155,12 +177,17 @@ class ExperimentConfig:
     wandb_entity: Optional[str] = None
     
     # Which experiments to run
-    run_standard: bool = True
-    run_transformed: bool = True
+    run_standard: bool = False
+    run_transformed: bool = False
     
     # New flags for separate transform experiments
-    run_linear_transform: bool = True
-    run_nonlinear_transform: bool = True
+    run_linear_transform: bool = False
+    run_nonlinear_transform: bool = False
+    
+    # New flags for lossy transform experiments (information-losing)
+    run_clustering_transform: bool = True
+    run_modular_transform: bool = True
+    run_quantization_transform: bool = True
     
     # Compute tracking
     track_compute: bool = True

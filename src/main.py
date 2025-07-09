@@ -70,6 +70,39 @@ def parse_args():
         action="store_true",
         help="Skip nonlinear transform experiments",
     )
+    parser.add_argument(
+        "--run-clustering",
+        action="store_true",
+        default=False,
+        help="Run clustering transform experiments",
+    )
+    parser.add_argument(
+        "--run-modular",
+        action="store_true",
+        default=False,
+        help="Run modular transform experiments",
+    )
+    parser.add_argument(
+        "--run-quantization",
+        action="store_true",
+        default=False,
+        help="Run quantization transform experiments",
+    )
+    parser.add_argument(
+        "--skip-clustering",
+        action="store_true",
+        help="Skip clustering transform experiments",
+    )
+    parser.add_argument(
+        "--skip-modular",
+        action="store_true",
+        help="Skip modular transform experiments",
+    )
+    parser.add_argument(
+        "--skip-quantization",
+        action="store_true",
+        help="Skip quantization transform experiments",
+    )
     
     # Model settings
     parser.add_argument(
@@ -175,6 +208,26 @@ def parse_args():
         help="Disable multi-GPU training even if multiple GPUs are available",
     )
     
+    # Transform settings
+    parser.add_argument(
+        "--clustering-ratio",
+        type=float,
+        default=0.25,
+        help="Compression ratio for clustering transform (num_clusters / vocab_size)",
+    )
+    parser.add_argument(
+        "--modular-ratio",
+        type=float,
+        default=0.125,
+        help="Compression ratio for modular transform (modulus / vocab_size)",
+    )
+    parser.add_argument(
+        "--quantization-ratio",
+        type=float,
+        default=0.0625,
+        help="Compression ratio for quantization transform (num_levels / vocab_size)",
+    )
+    
     # Other settings
     parser.add_argument(
         "--seed",
@@ -254,6 +307,9 @@ def main():
     config.run_transformed = args.run_transformed and not args.skip_transformed
     config.run_linear_transform = args.run_linear and not args.skip_linear
     config.run_nonlinear_transform = args.run_nonlinear and not args.skip_nonlinear
+    config.run_clustering_transform = args.run_clustering and not args.skip_clustering
+    config.run_modular_transform = args.run_modular and not args.skip_modular
+    config.run_quantization_transform = args.run_quantization and not args.skip_quantization
     
     # Parse model and dataset sizes
     if args.model_sizes != "all":
@@ -281,6 +337,12 @@ def main():
     config.wandb_project = args.wandb_project
     config.wandb_entity = args.wandb_entity
     
+    # Update transform configuration with compression ratios
+    vocab_size = config.model_config.vocab_size
+    config.transform_config.clustering_num_clusters = int(vocab_size * args.clustering_ratio)
+    config.transform_config.modular_modulus = int(vocab_size * args.modular_ratio)
+    config.transform_config.quantization_num_levels = int(vocab_size * args.quantization_ratio)
+    
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     config.training_config.output_dir = os.path.join(
@@ -307,6 +369,15 @@ def main():
     print(f"Run transformed: {config.run_transformed}")
     print(f"Run linear: {config.run_linear_transform}")
     print(f"Run nonlinear: {config.run_nonlinear_transform}")
+    print(f"Run clustering: {config.run_clustering_transform}")
+    print(f"Run modular: {config.run_modular_transform}")
+    print(f"Run quantization: {config.run_quantization_transform}")
+    if config.run_clustering_transform:
+        print(f"  Clustering clusters: {config.transform_config.clustering_num_clusters}")
+    if config.run_modular_transform:
+        print(f"  Modular modulus: {config.transform_config.modular_modulus}")
+    if config.run_quantization_transform:
+        print(f"  Quantization levels: {config.transform_config.quantization_num_levels}")
     print("=" * 80)
     
     if args.plot_only:
@@ -360,6 +431,18 @@ def main():
             if config.run_nonlinear_transform:
                 plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="nonlinear")
             
+            # Generate clustering transform plots
+            if config.run_clustering_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="clustering")
+            
+            # Generate modular transform plots
+            if config.run_modular_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="modular")
+            
+            # Generate quantization transform plots
+            if config.run_quantization_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="quantization")
+            
             # Compare standard vs transformed
             if config.run_standard and config.run_transformed:
                 compare_standard_vs_transformed(
@@ -383,6 +466,33 @@ def main():
                     type1='standard',
                     type2='nonlinear',
                     save_path=os.path.join(plot_dir, "comparison_nonlinear.png")
+                )
+            
+            # Compare standard vs clustering
+            if config.run_standard and config.run_clustering_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='clustering',
+                    save_path=os.path.join(plot_dir, "comparison_clustering.png")
+                )
+            
+            # Compare standard vs modular
+            if config.run_standard and config.run_modular_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='modular',
+                    save_path=os.path.join(plot_dir, "comparison_modular.png")
+                )
+            
+            # Compare standard vs quantization
+            if config.run_standard and config.run_quantization_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='quantization',
+                    save_path=os.path.join(plot_dir, "comparison_quantization.png")
                 )
             
             print("\n" + "=" * 80)

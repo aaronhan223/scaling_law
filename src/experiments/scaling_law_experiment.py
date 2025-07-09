@@ -129,7 +129,7 @@ class ScalingLawExperiment:
                 )
             elif experiment_type == "transformed":
                 # Create transformed dataloaders (both linear and nonlinear)
-                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
                     base_train_dataset=train_dataset,
                     base_valid_dataset=valid_dataset,
                     base_test_dataset=test_dataset,
@@ -145,7 +145,7 @@ class ScalingLawExperiment:
                 )
             elif experiment_type == "linear":
                 # Create dataloaders with only linear transformation
-                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
                     base_train_dataset=train_dataset,
                     base_valid_dataset=valid_dataset,
                     base_test_dataset=test_dataset,
@@ -163,7 +163,7 @@ class ScalingLawExperiment:
                 )
             elif experiment_type == "nonlinear":
                 # Create dataloaders with only nonlinear transformation
-                train_loader, valid_loader, test_loader, _, _ = create_transformed_dataloaders(
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
                     base_train_dataset=train_dataset,
                     base_valid_dataset=valid_dataset,
                     base_test_dataset=test_dataset,
@@ -178,6 +178,56 @@ class ScalingLawExperiment:
                     nonlinear_seed=self.config.transform_config.nonlinear_seed,
                     apply_linear=False,
                     apply_nonlinear=True,
+                )
+            elif experiment_type == "clustering":
+                # Create dataloaders with only clustering transformation
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    clustering_num_clusters=self.config.transform_config.clustering_num_clusters,
+                    clustering_embedding_dim=self.config.transform_config.clustering_embedding_dim,
+                    clustering_seed=self.config.transform_config.clustering_seed,
+                    apply_linear=False,
+                    apply_nonlinear=False,
+                    apply_clustering=True,
+                )
+            elif experiment_type == "modular":
+                # Create dataloaders with only modular transformation
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    modular_modulus=self.config.transform_config.modular_modulus,
+                    modular_seed=self.config.transform_config.modular_seed,
+                    apply_linear=False,
+                    apply_nonlinear=False,
+                    apply_modular=True,
+                )
+            elif experiment_type == "quantization":
+                # Create dataloaders with only quantization transformation
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    quantization_num_levels=self.config.transform_config.quantization_num_levels,
+                    quantization_embedding_dim=self.config.transform_config.quantization_embedding_dim,
+                    quantization_seed=self.config.transform_config.quantization_seed,
+                    apply_linear=False,
+                    apply_nonlinear=False,
+                    apply_quantization=True,
                 )
             else:
                 raise ValueError(f"Unknown experiment type: {experiment_type}")
@@ -275,8 +325,15 @@ class ScalingLawExperiment:
         dataset_sizes = self.config.data_config.dataset_sizes
         
         # Pre-cache datasets if running multiple experiment types
-        num_experiments = sum([self.config.run_standard, self.config.run_transformed, 
-                             self.config.run_linear_transform, self.config.run_nonlinear_transform])
+        num_experiments = sum([
+            self.config.run_standard, 
+            self.config.run_transformed, 
+            self.config.run_linear_transform, 
+            self.config.run_nonlinear_transform,
+            self.config.run_clustering_transform,
+            self.config.run_modular_transform,
+            self.config.run_quantization_transform
+        ])
         if num_experiments > 1:
             print("\n" + "="*80)
             print("PRE-CACHING DATASETS FOR EFFICIENCY")
@@ -376,6 +433,75 @@ class ScalingLawExperiment:
                     # Save intermediate results
                     self.save_results()
         
+        # Run clustering transform experiments
+        if self.config.run_clustering_transform:
+            print("\n" + "="*80)
+            print("RUNNING CLUSTERING TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="clustering",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
+        # Run modular transform experiments
+        if self.config.run_modular_transform:
+            print("\n" + "="*80)
+            print("RUNNING MODULAR TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="modular",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
+        # Run quantization transform experiments
+        if self.config.run_quantization_transform:
+            print("\n" + "="*80)
+            print("RUNNING QUANTIZATION TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="quantization",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
         # Clear dataset cache to free memory
         self.dataset_cache.clear()
         
@@ -411,6 +537,9 @@ class ScalingLawExperiment:
         transformed_df = df[df['experiment_type'] == 'transformed'].copy() if 'transformed' in df['experiment_type'].values else pd.DataFrame()
         linear_df = df[df['experiment_type'] == 'linear'].copy() if 'linear' in df['experiment_type'].values else pd.DataFrame()
         nonlinear_df = df[df['experiment_type'] == 'nonlinear'].copy() if 'nonlinear' in df['experiment_type'].values else pd.DataFrame()
+        clustering_df = df[df['experiment_type'] == 'clustering'].copy() if 'clustering' in df['experiment_type'].values else pd.DataFrame()
+        modular_df = df[df['experiment_type'] == 'modular'].copy() if 'modular' in df['experiment_type'].values else pd.DataFrame()
+        quantization_df = df[df['experiment_type'] == 'quantization'].copy() if 'quantization' in df['experiment_type'].values else pd.DataFrame()
         
         return {
             "all": df,
@@ -418,4 +547,7 @@ class ScalingLawExperiment:
             "transformed": transformed_df,
             "linear": linear_df,
             "nonlinear": nonlinear_df,
+            "clustering": clustering_df,
+            "modular": modular_df,
+            "quantization": quantization_df,
         } 

@@ -198,3 +198,5 @@ wandb/
 
 # Output directories
 outputs/
+
+docs/

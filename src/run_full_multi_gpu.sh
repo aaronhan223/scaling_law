@@ -58,17 +58,20 @@ echo "Starting multi-GPU comprehensive scaling law experiments..."
 CUDA_VISIBLE_DEVICES=$GPU_DEVICES python main.py \
     --experiment-name scaling_laws_full_multi_gpu \
     --model-sizes 0,1,2,3,4 \
-    --dataset-sizes 3M,10M,30M,100M,300M,1B \
+    --dataset-sizes 1M,3M,10M,30M,100M,300M \
     --wandb-project scaling-laws-r41 \
     --batch-size 4 \
     --eval-steps 500 \
     --warmup-steps 1000 \
     --learning-rate 5e-4 \
     --multi-gpu \
-    --run-standard \
-    --run-linear \
-    --run-nonlinear \
-    --skip-transformed
+    --run-clustering \
+    --run-modular \
+    --run-quantization \
+    --skip-standard \
+    --skip-linear \
+    --skip-nonlinear \
+    --skip-transformed 
 
 echo ""
 echo "=========================================="
