@@ -9,26 +9,32 @@ import numpy as np
 from tqdm import tqdm
 
 
-class WikiTextDataset(Dataset):
+class CustomDataset(Dataset):
     """WikiText-103 dataset for language modeling."""
     
     def __init__(
         self,
         split: str,
+        dataset_name: str,
+        dataset_config: Optional[str] = None,
         tokenizer_name: str = "gpt2",
         max_length: int = 1024,
         max_tokens: Optional[int] = None,
         seed: int = 42,
+        dataset_obj: Optional[Dataset] = None,
     ):
         """
-        Initialize WikiText dataset.
+        Initialize custom dataset.
         
         Args:
             split: Dataset split ('train', 'validation', 'test')
+            dataset_name: Name of the dataset on Hugging Face Hub
+            dataset_config: Optional dataset configuration
             tokenizer_name: Name of the tokenizer to use
             max_length: Maximum sequence length
             max_tokens: Maximum number of tokens to use (for scaling experiments)
             seed: Random seed for sampling
+            dataset_obj: Optional pre-loaded dataset object
         """
         self.split = split
         self.max_length = max_length
@@ -39,50 +45,50 @@ class WikiTextDataset(Dataset):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
+
         # Load dataset
-        print(f"Loading WikiText-103 {split} split...")
-        self.dataset = load_dataset("wikitext", "wikitext-103-v1", split=split)
+        if dataset_obj is not None:
+            self.dataset = dataset_obj
+        else:
+            print(f"Loading {dataset_name} ({dataset_config or 'default'}) {split} split...")
+            if dataset_config:
+                self.dataset = load_dataset(dataset_name, dataset_config, split=split)
+            else:
+                self.dataset = load_dataset(dataset_name, split=split)
         
         # Tokenize and prepare data
         self._prepare_data()
         
     def _prepare_data(self):
         """Tokenize and prepare the dataset."""
-        # Tokenize all texts
         print(f"Tokenizing {self.split} split...")
-        all_token_ids = []
         
-        for example in tqdm(self.dataset, desc="Tokenizing"):
-            text = example["text"]
-            if text.strip():  # Skip empty texts
-                tokens = self.tokenizer.encode(text, add_special_tokens=False)
-                all_token_ids.extend(tokens)
-        
-        # Convert to numpy array for efficient slicing
-        all_token_ids = np.array(all_token_ids)
-        
-        # Limit tokens if specified
-        if self.max_tokens is not None and len(all_token_ids) > self.max_tokens:
-            np.random.seed(self.seed)
-            # For training, take first max_tokens
-            # For validation/test, sample randomly but consistently
-            if self.split == "train":
-                all_token_ids = all_token_ids[:self.max_tokens]
-            else:
-                # Sample a subset for validation/test
-                indices = np.random.choice(len(all_token_ids), self.max_tokens, replace=False)
-                indices.sort()  # Keep order
-                all_token_ids = all_token_ids[indices]
-        
-        # Create sequences of max_length
         self.sequences = []
-        for i in range(0, len(all_token_ids) - self.max_length, self.max_length):
-            self.sequences.append(all_token_ids[i:i + self.max_length + 1])
-        
+        for example in tqdm(self.dataset, desc="Tokenizing and chunking"):
+            text = example["text"]
+            if text.strip():
+                tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                
+                for i in range(0, len(tokens), self.max_length):
+                    sequence_chunk = tokens[i: i + self.max_length + 1]
+                    if len(sequence_chunk) == self.max_length + 1:
+                        self.sequences.append(sequence_chunk)
+
+        if self.max_tokens is not None:
+            num_sequences_to_keep = self.max_tokens // self.max_length
+            if len(self.sequences) > num_sequences_to_keep:
+                if self.split == 'train':
+                    self.sequences = self.sequences[:num_sequences_to_keep]
+                else:
+                    np.random.seed(self.seed)
+                    indices = np.random.choice(len(self.sequences), num_sequences_to_keep, replace=False)
+                    indices.sort()
+                    self.sequences = [self.sequences[i] for i in indices]
+
         self.sequences = torch.tensor(self.sequences, dtype=torch.long)
+        
         print(f"Prepared {len(self.sequences)} sequences of length {self.max_length}")
-        print(f"Total tokens: {len(all_token_ids):,}")
+        print(f"Total tokens in prepared sequences: {len(self.sequences) * self.max_length:,}")
         
     def __len__(self):
         return len(self.sequences)
@@ -90,7 +96,6 @@ class WikiTextDataset(Dataset):
     def __getitem__(self, idx):
         """Get a single example."""
         sequence = self.sequences[idx]
-        # Input is all tokens except last, target is all tokens except first
         return {
             "input_ids": sequence[:-1],
             "labels": sequence[1:],
@@ -98,6 +103,8 @@ class WikiTextDataset(Dataset):
 
 
 def create_dataloaders(
+    dataset_name: str,
+    dataset_config: Optional[str],
     tokenizer_name: str = "gpt2",
     max_length: int = 1024,
     train_batch_size: int = 32,
@@ -113,32 +120,36 @@ def create_dataloaders(
     Returns:
         Tuple of (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = WikiTextDataset(
+    train_dataset = CustomDataset(
         split="train",
+        dataset_name=dataset_name,
+        dataset_config=dataset_config,
         tokenizer_name=tokenizer_name,
         max_length=max_length,
         max_tokens=max_tokens_train,
         seed=seed,
     )
     
-    valid_dataset = WikiTextDataset(
+    valid_dataset = CustomDataset(
         split="validation",
+        dataset_name=dataset_name,
+        dataset_config=dataset_config,
         tokenizer_name=tokenizer_name,
         max_length=max_length,
         max_tokens=max_tokens_valid,
         seed=seed,
     )
     
-    test_dataset = WikiTextDataset(
+    test_dataset = CustomDataset(
         split="test",
+        dataset_name=dataset_name,
+        dataset_config=dataset_config,
         tokenizer_name=tokenizer_name,
         max_length=max_length,
-        max_tokens=max_tokens_valid,  # Use same size as validation
+        max_tokens=max_tokens_valid,
         seed=seed,
     )
     
-    # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_batch_size,

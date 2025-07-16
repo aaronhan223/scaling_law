@@ -114,6 +114,18 @@ def parse_args():
     
     # Data settings
     parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default="wikitext",
+        help="Name of the dataset to use (e.g., wikitext, openwebtext)",
+    )
+    parser.add_argument(
+        "--dataset-config",
+        type=str,
+        default="wikitext-103-v1",
+        help="Dataset config name (e.g., wikitext-103-v1)",
+    )
+    parser.add_argument(
         "--dataset-sizes",
         type=str,
         default="1M,10M,100M",
@@ -302,6 +314,8 @@ def main():
     config = ExperimentConfig()
     
     # Update config from arguments
+    config.data_config.dataset_name = args.dataset_name
+    config.data_config.dataset_config = args.dataset_config
     config.experiment_name = args.experiment_name
     config.run_standard = args.run_standard and not args.skip_standard
     config.run_transformed = args.run_transformed and not args.skip_transformed
@@ -337,6 +351,10 @@ def main():
     config.wandb_project = args.wandb_project
     config.wandb_entity = args.wandb_entity
     
+    # Handle OpenWebText config
+    if config.data_config.dataset_name == "openwebtext":
+        config.data_config.dataset_config = None
+        
     # Update transform configuration with compression ratios
     vocab_size = config.model_config.vocab_size
     config.transform_config.clustering_num_clusters = int(vocab_size * args.clustering_ratio)

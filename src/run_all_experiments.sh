@@ -53,6 +53,7 @@ CUDA_VISIBLE_DEVICES=$GPU_DEVICES python main.py \
     --experiment-name comprehensive_scaling_laws \
     --model-sizes 0,1,2,3,4 \
     --dataset-sizes 100K,300K,1M,3M,10M,30M \
+    --dataset-name openwebtext \
     --wandb-project scaling-laws-comprehensive \
     --batch-size 4 \
     --eval-steps 500 \

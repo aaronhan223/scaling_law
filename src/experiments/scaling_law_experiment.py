@@ -6,9 +6,10 @@ from torch.utils.data import DataLoader
 import wandb
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
+from datasets import load_dataset
 
 from config import ExperimentConfig
-from data import WikiTextDataset, create_dataloaders
+from data import CustomDataset, create_dataloaders
 from data.transforms import create_transformed_dataloaders
 from models import create_model
 from training import Trainer, set_seed
@@ -34,34 +35,91 @@ class ScalingLawExperiment:
         self,
         dataset_size: int,
         cache_key: Optional[str] = None
-    ) -> Tuple[WikiTextDataset, WikiTextDataset, WikiTextDataset]:
+    ) -> Tuple[CustomDataset, CustomDataset, CustomDataset]:
         """Get datasets from cache or create new ones."""
         if cache_key is None:
-            cache_key = f"size_{dataset_size}"
+            cache_key = f"{self.config.data_config.dataset_name}_{self.config.data_config.dataset_config}_{dataset_size}"
             
         if cache_key not in self.dataset_cache:
             print(f"Creating datasets for {dataset_size:,} tokens...")
-            train_dataset = WikiTextDataset(
-                split="train",
-                tokenizer_name=self.config.data_config.tokenizer_name,
-                max_length=self.config.data_config.max_length,
-                max_tokens=dataset_size,
-                seed=self.config.training_config.seed,
-            )
-            valid_dataset = WikiTextDataset(
-                split="validation",
-                tokenizer_name=self.config.data_config.tokenizer_name,
-                max_length=self.config.data_config.max_length,
-                max_tokens=min(dataset_size // 10, int(1e6)),
-                seed=self.config.training_config.seed,
-            )
-            test_dataset = WikiTextDataset(
-                split="test",
-                tokenizer_name=self.config.data_config.tokenizer_name,
-                max_length=self.config.data_config.max_length,
-                max_tokens=min(dataset_size // 10, int(1e6)),
-                seed=self.config.training_config.seed,
-            )
+            
+            # Special handling for openwebtext
+            if self.config.data_config.dataset_name == 'openwebtext':
+                print("Splitting OpenWebText into train/validation/test...")
+                full_dataset = load_dataset('openwebtext', split='train')
+                
+                # Split: 98% train, 1% validation, 1% test
+                train_valid_test = full_dataset.train_test_split(test_size=0.02, seed=self.config.training_config.seed)
+                train_valid = train_valid_test['train'].train_test_split(test_size=(0.01/0.98), seed=self.config.training_config.seed)
+                
+                dataset_splits = {
+                    "train": train_valid['train'],
+                    "validation": train_valid['test'],
+                    "test": train_valid_test['test']
+                }
+
+                # Create CustomDataset instances with the splits
+                train_dataset = CustomDataset(
+                    split="train",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=dataset_size,
+                    seed=self.config.training_config.seed,
+                    dataset_obj=dataset_splits['train'],
+                )
+
+                valid_dataset = CustomDataset(
+                    split="validation",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=min(dataset_size // 100, int(1e6)),
+                    seed=self.config.training_config.seed,
+                    dataset_obj=dataset_splits['validation'],
+                )
+
+                test_dataset = CustomDataset(
+                    split="test",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=min(dataset_size // 100, int(1e6)),
+                    seed=self.config.training_config.seed,
+                    dataset_obj=dataset_splits['test'],
+                )
+
+            else:
+                train_dataset = CustomDataset(
+                    split="train",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=dataset_size,
+                    seed=self.config.training_config.seed,
+                )
+                valid_dataset = CustomDataset(
+                    split="validation",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=min(dataset_size // 10, int(1e6)),
+                    seed=self.config.training_config.seed,
+                )
+                test_dataset = CustomDataset(
+                    split="test",
+                    dataset_name=self.config.data_config.dataset_name,
+                    dataset_config=self.config.data_config.dataset_config,
+                    tokenizer_name=self.config.data_config.tokenizer_name,
+                    max_length=self.config.data_config.max_length,
+                    max_tokens=min(dataset_size // 10, int(1e6)),
+                    seed=self.config.training_config.seed,
+                )
             self.dataset_cache[cache_key] = (train_dataset, valid_dataset, test_dataset)
         else:
             print(f"Using cached datasets for {dataset_size:,} tokens...")
@@ -85,6 +143,8 @@ class ScalingLawExperiment:
         if experiment_type == "standard" and self.config.use_standard_dataloader_optimization:
             # Use optimized dataloader creation for standard experiments
             train_loader, valid_loader, test_loader = create_dataloaders(
+                dataset_name=self.config.data_config.dataset_name,
+                dataset_config=self.config.data_config.dataset_config,
                 tokenizer_name=self.config.data_config.tokenizer_name,
                 max_length=self.config.data_config.max_length,
                 train_batch_size=self.config.data_config.train_batch_size,
