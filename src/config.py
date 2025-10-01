@@ -1,7 +1,7 @@
 """Configuration for scaling law experiments."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 
@@ -124,7 +124,7 @@ class TrainingConfig:
         """Calculate max training steps based on number of tokens."""
         # Ensure we see each token ~once (single epoch)
         tokens_per_batch = batch_size * seq_length * self.gradient_accumulation_steps
-        return max(1000, num_tokens // tokens_per_batch)
+        return int(max(1000, num_tokens // tokens_per_batch))
 
 
 @dataclass
@@ -136,7 +136,9 @@ class TransformConfig:
     
     # Non-linear transformation
     nonlinear_type: str = "tanh"  # Options: "tanh", "sigmoid", "relu"
-    nonlinear_scale: float = 0.1
+    nonlinear_hidden_dims: Optional[List[int]] = None
+    nonlinear_dropout_rate: float = 0.1
+    nonlinear_noise_scale: float = 0.1
     nonlinear_seed: int = 43
     
     # Clustering transformation (information-losing)
@@ -153,22 +155,27 @@ class TransformConfig:
     quantization_embedding_dim: int = 64
     quantization_seed: int = 46
     
+    # Low-rank square matrix transformation
+    lowrank_rank: Optional[int] = None  # Default to vocab_size // 8
+    lowrank_seed: int = 47
+    
     def get_default_lossy_params(self, vocab_size: int):
         """Get default parameters for lossy transforms based on vocab size."""
         return {
             'clustering_num_clusters': self.clustering_num_clusters or max(vocab_size // 4, 100),
             'modular_modulus': self.modular_modulus or max(vocab_size // 8, 50),
             'quantization_num_levels': self.quantization_num_levels or max(vocab_size // 16, 25),
+            'lowrank_rank': self.lowrank_rank or max(vocab_size // 8, 50),
         }
 
 
 @dataclass
 class ExperimentConfig:
     """Main experiment configuration."""
-    model_config: ModelConfig = ModelConfig()
-    data_config: DataConfig = DataConfig()
-    training_config: TrainingConfig = TrainingConfig()
-    transform_config: TransformConfig = TransformConfig()
+    model_config: ModelConfig = field(default_factory=ModelConfig)
+    data_config: DataConfig = field(default_factory=DataConfig)
+    training_config: TrainingConfig = field(default_factory=TrainingConfig)
+    transform_config: TransformConfig = field(default_factory=TransformConfig)
     
     # Experiment settings
     experiment_name: str = "scaling_laws"
@@ -188,6 +195,7 @@ class ExperimentConfig:
     run_clustering_transform: bool = True
     run_modular_transform: bool = True
     run_quantization_transform: bool = True
+    run_lowrank_transform: bool = True
     
     # Compute tracking
     track_compute: bool = True
@@ -198,14 +206,18 @@ class ExperimentConfig:
     
     # Reproducibility
     deterministic: bool = True
-    
+
+    # Private attributes for device settings
+    _device: Optional[str] = None
+    _multi_gpu: Optional[bool] = None
+
     @property
     def device(self):
-        return "cuda"
-    
+        return self._device if self._device is not None else "cuda"
+
     @property
     def multi_gpu(self):
-        return True
+        return self._multi_gpu if self._multi_gpu is not None else True
     
     def get_output_dir(self, experiment_type: str, model_name: str, dataset_size: int):
         """Get output directory for a specific experiment."""

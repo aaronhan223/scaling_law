@@ -89,6 +89,12 @@ def parse_args():
         help="Run quantization transform experiments",
     )
     parser.add_argument(
+        "--run-lowrank",
+        action="store_true",
+        default=False,
+        help="Run low-rank square matrix transform experiments",
+    )
+    parser.add_argument(
         "--skip-clustering",
         action="store_true",
         help="Skip clustering transform experiments",
@@ -102,6 +108,11 @@ def parse_args():
         "--skip-quantization",
         action="store_true",
         help="Skip quantization transform experiments",
+    )
+    parser.add_argument(
+        "--skip-lowrank",
+        action="store_true",
+        help="Skip low-rank transform experiments",
     )
     
     # Model settings
@@ -239,6 +250,12 @@ def parse_args():
         default=0.0625,
         help="Compression ratio for quantization transform (num_levels / vocab_size)",
     )
+    parser.add_argument(
+        "--lowrank-ratio",
+        type=float,
+        default=0.02,
+        help="Compression ratio for low-rank transform (rank / vocab_size)",
+    )
     
     # Other settings
     parser.add_argument(
@@ -324,6 +341,7 @@ def main():
     config.run_clustering_transform = args.run_clustering and not args.skip_clustering
     config.run_modular_transform = args.run_modular and not args.skip_modular
     config.run_quantization_transform = args.run_quantization and not args.skip_quantization
+    config.run_lowrank_transform = args.run_lowrank and not args.skip_lowrank
     
     # Parse model and dataset sizes
     if args.model_sizes != "all":
@@ -360,6 +378,7 @@ def main():
     config.transform_config.clustering_num_clusters = int(vocab_size * args.clustering_ratio)
     config.transform_config.modular_modulus = int(vocab_size * args.modular_ratio)
     config.transform_config.quantization_num_levels = int(vocab_size * args.quantization_ratio)
+    config.transform_config.lowrank_rank = int(vocab_size * args.lowrank_ratio)
     
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -390,12 +409,15 @@ def main():
     print(f"Run clustering: {config.run_clustering_transform}")
     print(f"Run modular: {config.run_modular_transform}")
     print(f"Run quantization: {config.run_quantization_transform}")
+    print(f"Run low-rank: {config.run_lowrank_transform}")
     if config.run_clustering_transform:
         print(f"  Clustering clusters: {config.transform_config.clustering_num_clusters}")
     if config.run_modular_transform:
         print(f"  Modular modulus: {config.transform_config.modular_modulus}")
     if config.run_quantization_transform:
         print(f"  Quantization levels: {config.transform_config.quantization_num_levels}")
+    if config.run_lowrank_transform:
+        print(f"  Low-rank rank: {config.transform_config.lowrank_rank}")
     print("=" * 80)
     
     if args.plot_only:
@@ -461,6 +483,10 @@ def main():
             if config.run_quantization_transform:
                 plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="quantization")
             
+            # Generate low-rank transform plots
+            if config.run_lowrank_transform:
+                plot_all_scaling_laws(df_results["all"], plot_dir, experiment_type="lowrank")
+            
             # Compare standard vs transformed
             if config.run_standard and config.run_transformed:
                 compare_standard_vs_transformed(
@@ -511,6 +537,15 @@ def main():
                     type1='standard',
                     type2='quantization',
                     save_path=os.path.join(plot_dir, "comparison_quantization.png")
+                )
+            
+            # Compare standard vs low-rank
+            if config.run_standard and config.run_lowrank_transform:
+                compare_experiment_types(
+                    df_results["all"],
+                    type1='standard',
+                    type2='lowrank',
+                    save_path=os.path.join(plot_dir, "comparison_lowrank.png")
                 )
             
             print("\n" + "=" * 80)

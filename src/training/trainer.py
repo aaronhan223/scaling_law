@@ -3,17 +3,21 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+# from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 import wandb
 from tqdm import tqdm
 import time
 import os
+import gc
 from typing import Optional, Dict, Any, Tuple
 from .utils import (
     get_optimizer, get_scheduler, save_checkpoint,
     load_checkpoint, compute_gradient_norm
 )
 import pdb
+from .memory_utils import setup_memory_optimization, MemoryMonitor, adaptive_batch_size
 
 
 class Trainer:
@@ -118,6 +122,9 @@ class Trainer:
         
         # Initialize wandb
         if use_wandb and wandb_project:
+            # Set environment variable to disable package tracking (fixes metadata error)
+            os.environ["WANDB_DISABLE_CODE"] = "true"
+
             wandb_config = {
                 "model_config": self._base_model.config if hasattr(self._base_model, "config") else {},
                 "learning_rate": learning_rate,
@@ -131,19 +138,31 @@ class Trainer:
                 "num_gpus": self.n_gpu if self.use_multi_gpu else 1,
                 "multi_gpu": self.use_multi_gpu and self.n_gpu > 1,
             }
-            
-            wandb.init(
-                project=wandb_project,
-                name=wandb_run_name or experiment_name,
-                config=wandb_config
-            )
-            wandb.watch(self.model, log="gradients", log_freq=100)
+
+            try:
+                wandb.init(
+                    project=wandb_project,
+                    name=wandb_run_name or experiment_name,
+                    config=wandb_config
+                )
+                wandb.watch(self.model, log="gradients", log_freq=100)
+            except Exception as e:
+                print(f"Warning: Failed to initialize wandb: {e}")
+                print("Continuing without wandb logging...")
+                self.use_wandb = False
         
         # Training state
         self.global_step = 0
         self.best_eval_loss = float("inf")
         self.train_loss_accumulator = 0.0
         self.train_steps_accumulator = 0
+        
+        # Memory management settings
+        self.memory_cleanup_steps = 100  # Clean memory every 100 steps
+        self.enable_memory_cleanup = True
+        
+        # Set up memory optimization
+        setup_memory_optimization()
         
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -177,7 +196,7 @@ class Trainer:
                 batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
             # Forward pass
             if self.fp16:
-                with autocast():
+                with autocast('cuda'):
                     outputs = self.model(**batch)
                     loss = outputs["loss"]
             else:
@@ -232,16 +251,26 @@ class Trainer:
                 if self.compute_tracker:
                     self.compute_tracker.step()
                 
+                # Memory cleanup to prevent fragmentation
+                if (self.enable_memory_cleanup and 
+                    self.global_step % self.memory_cleanup_steps == 0 and 
+                    torch.cuda.is_available()):
+                    self._cleanup_memory()
+                
                 # Logging
                 if self.global_step % self.logging_steps == 0:
                     avg_train_loss = self.train_loss_accumulator / self.train_steps_accumulator
                     perplexity = torch.exp(torch.tensor(avg_train_loss))
                     
                     elapsed_time = time.time() - start_time
-                    samples_per_second = (
-                        self.global_step * self.train_dataloader.batch_size *
-                        self.gradient_accumulation_steps / elapsed_time
-                    )
+                    # Avoid division by zero
+                    if elapsed_time > 0:
+                        samples_per_second = (
+                            self.global_step * self.train_dataloader.batch_size *
+                            self.gradient_accumulation_steps / elapsed_time
+                        )
+                    else:
+                        samples_per_second = 0.0
                     
                     log_dict = {
                         "train/loss": avg_train_loss,
@@ -345,42 +374,168 @@ class Trainer:
         """Evaluate model on given dataloader."""
         if dataloader is None:
             dataloader = self.eval_dataloader
-        
+
+        # Debug: Check if dataloader has samples
+        print(f"Evaluating on dataloader with {len(dataloader)} batches")
+        if len(dataloader) == 0:
+            print("Warning: Evaluation dataloader is empty!")
+            return {
+                "loss": float('inf'),
+                "perplexity": float('inf'),
+                "accuracy": 0.0,
+            }
+
         self.model.eval()
         total_loss = 0.0
         total_tokens = 0
-        
-        for batch in tqdm(dataloader, desc="Evaluating"):
+        total_correct = 0
+        total_samples = 0
+
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
             batch = {k: v.to(self.device) for k, v in batch.items()}
-            
-            # Safety check: ensure token IDs are within valid range
+
+            # Safety check: ensure token IDs are within valid range (for text models)
             if "input_ids" in batch:
                 batch["input_ids"] = torch.clamp(batch["input_ids"], 0, 50256)
             if "labels" in batch:
                 batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
-            
-            if self.fp16:
-                with autocast():
+
+            try:
+                if self.fp16:
+                    with autocast('cuda'):
+                        outputs = self.model(**batch)
+                else:
                     outputs = self.model(**batch)
-            else:
-                outputs = self.model(**batch)
-            
+            except Exception as e:
+                print(f"Error in model forward pass: {e}")
+                print(f"Batch keys: {list(batch.keys())}")
+                for key, value in batch.items():
+                    print(f"  {key}: shape = {value.shape}")
+                raise
+
             loss = outputs["loss"]
-            
+
             # Ensure loss is scalar (important for multi-GPU training)
             if loss.dim() > 0:
                 loss = loss.mean()
-            
-            batch_size, seq_length = batch["input_ids"].shape
-            num_tokens = batch_size * seq_length
-            
-            total_loss += loss.item() * num_tokens
-            total_tokens += num_tokens
+
+            # Calculate tokens/samples based on model type
+            if "input_ids" in batch:
+                # Text model
+                batch_size, seq_length = batch["input_ids"].shape
+                num_tokens = batch_size * seq_length
+                total_loss += loss.item() * num_tokens
+                total_tokens += num_tokens
+            else:
+                # Image model - use number of samples
+                if "x" in batch:
+                    batch_size = batch["x"].shape[0]
+                elif "image" in batch:
+                    batch_size = batch["image"].shape[0]
+                else:
+                    batch_size = 1
+                    print(f"Warning: Could not determine batch size for batch with keys: {list(batch.keys())}")
+
+                total_loss += loss.item() * batch_size
+                total_samples += batch_size
+
+                # Calculate accuracy for classification
+                if "accuracy" in outputs:
+                    accuracy_tensor = outputs["accuracy"]
+                    # Handle both scalar tensors and tensors from DataParallel
+                    if accuracy_tensor.dim() == 0:
+                        # Scalar tensor
+                        accuracy_value = accuracy_tensor.item()
+                    else:
+                        # Tensor with multiple elements (e.g., from DataParallel)
+                        accuracy_value = accuracy_tensor.mean().item()
+                    total_correct += accuracy_value * batch_size
+                elif "logits" in outputs and "labels" in batch:
+                    # Calculate accuracy manually
+                    logits = outputs["logits"]
+                    labels = batch["labels"]
+
+                    # Handle DataParallel outputs which might be lists or multi-dimensional
+                    if isinstance(logits, (list, tuple)):
+                        # DataParallel returns list of tensors
+                        all_predictions = []
+                        all_labels = []
+                        for i, logit_tensor in enumerate(logits):
+                            all_predictions.append(torch.argmax(logit_tensor, dim=-1))
+                            all_labels.append(labels[i] if isinstance(labels, (list, tuple)) else labels)
+                        predictions = torch.cat(all_predictions)
+                        labels_concat = torch.cat(all_labels) if isinstance(labels, (list, tuple)) else labels
+                    else:
+                        predictions = torch.argmax(logits, dim=-1)
+                        labels_concat = labels
+
+                    correct = (predictions == labels_concat).sum().item()
+                    total_correct += correct
+
+        # Calculate final metrics based on model type
+        if total_tokens > 0:
+            # Text model metrics
+            avg_loss = total_loss / total_tokens
+            perplexity = torch.exp(torch.tensor(avg_loss))
+            print(f"Evaluation complete: {total_tokens} tokens processed, avg_loss = {avg_loss:.4f}")
+            return {
+                "loss": avg_loss,
+                "perplexity": perplexity.item() if isinstance(perplexity, torch.Tensor) else perplexity,
+            }
+        elif total_samples > 0:
+            # Image model metrics
+            avg_loss = total_loss / total_samples
+            accuracy = total_correct / total_samples if total_samples > 0 else 0.0
+            print(f"Evaluation complete: {total_samples} samples processed, avg_loss = {avg_loss:.4f}, accuracy = {accuracy:.4f}")
+            return {
+                "loss": avg_loss,
+                "accuracy": accuracy,
+            }
+        else:
+            print("Warning: No tokens or samples processed during evaluation. Using default loss.")
+            return {
+                "loss": float('inf'),
+                "perplexity": float('inf'),
+                "accuracy": 0.0,
+            }
+    
+    def _cleanup_memory(self):
+        """Clean up GPU memory to prevent fragmentation and OOM errors."""
+        if torch.cuda.is_available():
+            # Clear cache
+            torch.cuda.empty_cache()
+            # Force garbage collection
+            gc.collect()
+            # Synchronize to ensure cleanup is complete
+            torch.cuda.synchronize()
+    
+    def _get_memory_info(self) -> Dict[str, float]:
+        """Get current GPU memory usage information."""
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated() / (1024**3)  # GB
+            memory_reserved = torch.cuda.memory_reserved() / (1024**3)   # GB
+            memory_max_allocated = torch.cuda.max_memory_allocated() / (1024**3)  # GB
+            return {
+                "memory_allocated_gb": memory_allocated,
+                "memory_reserved_gb": memory_reserved,
+                "memory_max_allocated_gb": memory_max_allocated,
+                "memory_utilization": memory_allocated / memory_reserved if memory_reserved > 0 else 0.0
+            }
+        return {}
+    
+    def enable_memory_efficient_training(self):
+        """Enable additional memory optimizations for large models."""
+        self.enable_memory_cleanup = True
+        self.memory_cleanup_steps = 50  # More frequent cleanup
         
-        avg_loss = total_loss / total_tokens
-        perplexity = torch.exp(torch.tensor(avg_loss))
+        # Enable gradient checkpointing if available
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+        elif hasattr(self._base_model, 'gradient_checkpointing_enable'):
+            self._base_model.gradient_checkpointing_enable()
         
-        return {
-            "loss": avg_loss,
-            "perplexity": perplexity.item(),
-        } 
+        # Reduce precision for memory efficiency
+        if not self.fp16:
+            print("Warning: Consider enabling fp16 for better memory efficiency")
+        
+        print("Memory efficient training enabled") 

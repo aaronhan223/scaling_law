@@ -134,64 +134,129 @@ class LinearTransform(nn.Module):
 
 
 class NonLinearTransform(nn.Module):
-    """Random non-linear transformation for token embeddings."""
+    """Multi-layer stochastic non-linear transformation for token embeddings."""
     
     def __init__(
         self,
         vocab_size: int,
+        hidden_dims: Optional[List[int]] = None,
         nonlinear_type: str = "tanh",
-        scale: float = 0.1,
+        dropout_rate: float = 0.1,
+        noise_scale: float = 0.1,
         seed: int = 43,
     ):
         """
-        Initialize non-linear transformation.
+        Initialize multi-layer non-linear transformation.
         
         Args:
             vocab_size: Size of vocabulary
-            nonlinear_type: Type of non-linearity ('tanh', 'sigmoid', 'relu')
-            scale: Scale factor for random noise
+            hidden_dims: List of hidden layer dimensions (default: [vocab_size*2, vocab_size, vocab_size//2])
+            nonlinear_type: Type of non-linearity ('tanh', 'sigmoid', 'relu', 'gelu')
+            dropout_rate: Dropout rate for stochastic behavior
+            noise_scale: Scale for gaussian noise injection
             seed: Random seed
         """
         super().__init__()
         self.vocab_size = vocab_size
         self.nonlinear_type = nonlinear_type
-        self.scale = scale
+        self.dropout_rate = dropout_rate
+        self.noise_scale = noise_scale
         
         # Set random seed
         torch.manual_seed(seed)
         np.random.seed(seed)
         
-        # Initialize random parameters for non-linear transformation
-        self.shift = nn.Parameter(torch.randn(vocab_size) * scale)
-        self.scale_factor = nn.Parameter(1.0 + torch.randn(vocab_size) * scale)
+        # Default hidden dimensions if not provided
+        if hidden_dims is None:
+            hidden_dims = [
+                max(vocab_size * 2, 512),  # Expand first
+                max(vocab_size, 256),      # Maintain
+                max(vocab_size // 2, 128)  # Compress
+            ]
+        self.hidden_dims = hidden_dims
         
-        # Select non-linearity
-        if nonlinear_type == "tanh":
-            self.nonlinearity = torch.tanh
-        elif nonlinear_type == "sigmoid":
-            self.nonlinearity = torch.sigmoid
-        elif nonlinear_type == "relu":
-            self.nonlinearity = F.relu
-        else:
-            raise ValueError(f"Unknown nonlinear_type: {nonlinear_type}")
+        # Build multi-layer network
+        layers = []
+        input_dim = vocab_size
+        
+        for i, hidden_dim in enumerate(hidden_dims):
+            # Linear layer
+            layers.append(nn.Linear(input_dim, hidden_dim))
             
+            # Batch normalization for stability
+            layers.append(nn.BatchNorm1d(hidden_dim))
+            
+            # Non-linearity
+            if nonlinear_type == "tanh":
+                layers.append(nn.Tanh())
+            elif nonlinear_type == "sigmoid":
+                layers.append(nn.Sigmoid())
+            elif nonlinear_type == "relu":
+                layers.append(nn.ReLU())
+            elif nonlinear_type == "gelu":
+                layers.append(nn.GELU())
+            else:
+                raise ValueError(f"Unknown nonlinear_type: {nonlinear_type}")
+            
+            # Dropout for stochasticity
+            layers.append(nn.Dropout(dropout_rate))
+            
+            input_dim = hidden_dim
+        
+        # Final output layer to map back to vocab_size
+        layers.append(nn.Linear(input_dim, vocab_size))
+        
+        # Create the network
+        self.network = nn.Sequential(*layers)
+        
+        # Initialize weights with Xavier/Glorot initialization
+        self._initialize_weights()
+        
         # Precompute token mapping
         self._precompute_mapping()
     
+    def _initialize_weights(self):
+        """Initialize network weights for better convergence."""
+        for module in self.network.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier/Glorot initialization
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+    
     def _precompute_mapping(self):
-        """Precompute the nonlinear token mapping."""
+        """Precompute the nonlinear token mapping using the multi-layer network."""
         with torch.no_grad():
-            # Create identity matrix for one-hot representation
-            eye = torch.eye(self.vocab_size)
+            # Set network to evaluation mode for consistent mapping
+            self.network.eval()
             
-            # Apply transformations
-            transformed = eye * self.scale_factor + self.shift
-            transformed = self.nonlinearity(transformed)
+            # Create one-hot identity matrix for all tokens
+            eye = torch.eye(self.vocab_size, dtype=torch.float32)
             
-            # Normalize to get valid probability distribution
+            # Add gaussian noise for stochasticity during precomputation
+            if self.noise_scale > 0:
+                noise = torch.randn_like(eye) * self.noise_scale
+                eye = eye + noise
+            
+            # Pass through the network in batches to avoid memory issues
+            batch_size = min(1000, self.vocab_size)
+            transformed_outputs = []
+            
+            for i in range(0, self.vocab_size, batch_size):
+                end_idx = min(i + batch_size, self.vocab_size)
+                batch_input = eye[i:end_idx]
+                
+                # Forward pass through network
+                batch_output = self.network(batch_input)
+                transformed_outputs.append(batch_output)
+            
+            # Concatenate all outputs
+            transformed = torch.cat(transformed_outputs, dim=0)
+            
+            # Apply softmax to get valid probability distribution
             transformed = F.softmax(transformed, dim=1)
             
-            # Create deterministic mapping
+            # Create deterministic mapping by taking argmax
             self.token_mapping = torch.argmax(transformed, dim=1)
             
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
@@ -234,7 +299,7 @@ class NonLinearTransform(nn.Module):
     
     def transform_embeddings(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
-        Apply transformation directly to embeddings.
+        Apply multi-layer transformation directly to embeddings.
         
         Args:
             embeddings: Embedding matrix [vocab_size, embedding_dim]
@@ -242,11 +307,27 @@ class NonLinearTransform(nn.Module):
         Returns:
             Transformed embeddings
         """
-        # Apply scaling and shifting to embeddings
-        transformed_embeddings = embeddings * self.scale_factor.unsqueeze(1) + self.shift.unsqueeze(1)
+        # Set network to training mode for stochastic behavior
+        self.network.train()
         
-        # Apply non-linearity
-        transformed_embeddings = self.nonlinearity(transformed_embeddings)
+        with torch.no_grad():
+            # Get the transformation matrix from our precomputed mapping
+            # This creates a permutation matrix based on token mapping
+            vocab_size = embeddings.size(0)
+            embedding_dim = embeddings.size(1)
+            
+            # Create transformation matrix using the token mapping
+            transform_matrix = torch.zeros(vocab_size, vocab_size)
+            for i in range(vocab_size):
+                transform_matrix[i, self.token_mapping[i]] = 1.0
+            
+            # Apply transformation to embeddings
+            transformed_embeddings = torch.matmul(transform_matrix, embeddings)
+            
+            # Add some gaussian noise for additional stochasticity
+            if self.training and self.noise_scale > 0:
+                noise = torch.randn_like(transformed_embeddings) * self.noise_scale * 0.1
+                transformed_embeddings = transformed_embeddings + noise
         
         return transformed_embeddings
 
@@ -481,20 +562,26 @@ class QuantizationTransform(nn.Module):
         self._precompute_quantization()
     
     def _precompute_quantization(self):
-        """Precompute the quantized token mapping."""
+        """Precompute the quantized token mapping with memory optimization."""
         with torch.no_grad():
             # For each token embedding, find the nearest quantization level
             token_embeddings = self.token_embeddings
             quantization_levels = self.quantization_levels
             
-            # Compute distances between each token and each quantization level
-            # token_embeddings: [vocab_size, embedding_dim]
-            # quantization_levels: [num_levels, embedding_dim]
+            # Process in chunks to reduce peak memory usage
+            chunk_size = min(1000, self.vocab_size)  # Process 1000 tokens at a time
+            nearest_levels = torch.zeros(self.vocab_size, dtype=torch.long)
             
-            distances = torch.cdist(token_embeddings, quantization_levels)  # [vocab_size, num_levels]
-            
-            # Find nearest quantization level for each token
-            nearest_levels = torch.argmin(distances, dim=1)  # [vocab_size]
+            for start_idx in range(0, self.vocab_size, chunk_size):
+                end_idx = min(start_idx + chunk_size, self.vocab_size)
+                chunk_embeddings = token_embeddings[start_idx:end_idx]
+                
+                # Compute distances for this chunk
+                distances = torch.cdist(chunk_embeddings, quantization_levels)
+                nearest_levels[start_idx:end_idx] = torch.argmin(distances, dim=1)
+                
+                # Clear intermediate tensors to free memory
+                del distances, chunk_embeddings
             
             # Map quantization levels back to token IDs
             # Find representative token for each quantization level
@@ -555,6 +642,125 @@ class QuantizationTransform(nn.Module):
         return self.num_levels / self.vocab_size 
 
 
+class LowRankSquareTransform(nn.Module):
+    """Low-rank square matrix transformation for token embeddings."""
+    
+    def __init__(
+        self,
+        vocab_size: int,
+        rank: int,
+        seed: int = 47,
+    ):
+        """
+        Initialize low-rank square matrix transformation.
+        
+        Args:
+            vocab_size: Size of vocabulary
+            rank: Rank of the low-rank decomposition (must be <= vocab_size)
+            seed: Random seed
+        """
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.rank = min(rank, vocab_size)  # Ensure valid rank
+        
+        # Set random seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        
+        # Create low-rank decomposition: M = U @ V^T
+        # where U is [vocab_size, rank] and V is [vocab_size, rank]
+        # The resulting matrix M is [vocab_size, vocab_size] with rank <= rank
+        self.U = nn.Parameter(
+            torch.randn(vocab_size, self.rank) * np.sqrt(2.0 / (vocab_size + self.rank))
+        )
+        self.V = nn.Parameter(
+            torch.randn(vocab_size, self.rank) * np.sqrt(2.0 / (vocab_size + self.rank))
+        )
+        
+        # Precompute the transformation matrix and token mapping
+        self._precompute_transformation()
+    
+    def _precompute_transformation(self):
+        """Precompute the low-rank transformation matrix and token mapping."""
+        with torch.no_grad():
+            # Compute the low-rank transformation matrix M = U @ V^T
+            self.transformation_matrix = torch.matmul(self.U, self.V.T)
+            
+            # Apply softmax to get probability distribution over output tokens
+            self.token_mapping_probs = F.softmax(self.transformation_matrix, dim=1)
+            
+            # Create deterministic mapping by taking argmax
+            self.token_mapping = torch.argmax(self.token_mapping_probs, dim=1)
+    
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Apply low-rank transformation to token IDs using efficient lookup.
+        
+        Args:
+            token_ids: Tensor of token IDs
+            
+        Returns:
+            Transformed token IDs
+        """
+        # Ensure input token IDs are within valid range
+        token_ids = torch.clamp(token_ids, 0, self.vocab_size - 1)
+        
+        # Use direct lookup instead of matrix multiplication
+        transformed_ids = self.token_mapping[token_ids]
+        
+        return transformed_ids
+    
+    def forward_batch(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """
+        Optimized batch transformation.
+        
+        Args:
+            token_ids: Batch tensor of token IDs
+            
+        Returns:
+            Transformed token IDs
+        """
+        # Flatten for efficient lookup
+        original_shape = token_ids.shape
+        flat_ids = token_ids.flatten()
+        
+        # Transform using lookup
+        flat_transformed = self.token_mapping[flat_ids]
+        
+        # Restore original shape
+        return flat_transformed.view(original_shape)
+    
+    def transform_embeddings(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        Apply low-rank transformation directly to embeddings.
+        
+        Args:
+            embeddings: Embedding matrix [vocab_size, embedding_dim]
+            
+        Returns:
+            Transformed embeddings
+        """
+        # Apply low-rank transformation to embedding matrix
+        # M @ embeddings where M = U @ V^T
+        # This is equivalent to U @ (V^T @ embeddings)
+        intermediate = torch.matmul(self.V.T, embeddings)
+        transformed_embeddings = torch.matmul(self.U, intermediate)
+        
+        return transformed_embeddings
+    
+    def get_rank(self) -> int:
+        """Get the rank of the transformation matrix."""
+        return self.rank
+    
+    def get_compression_ratio(self) -> float:
+        """Get the compression ratio (parameter efficiency measure)."""
+        # Low-rank matrix uses 2 * vocab_size * rank parameters
+        # Full matrix would use vocab_size^2 parameters
+        low_rank_params = 2 * self.vocab_size * self.rank
+        full_rank_params = self.vocab_size * self.vocab_size
+        return low_rank_params / full_rank_params
+
+
 class TransformedDataset(Dataset):
     """Dataset wrapper that applies transformations with caching."""
     
@@ -566,6 +772,7 @@ class TransformedDataset(Dataset):
         clustering_transform: Optional[ClusteringTransform] = None,
         modular_transform: Optional[ModularTransform] = None,
         quantization_transform: Optional[QuantizationTransform] = None,
+        lowrank_transform: Optional[LowRankSquareTransform] = None,
         cache_transformed: bool = True,
         batch_size: int = 1000,
     ):
@@ -579,6 +786,7 @@ class TransformedDataset(Dataset):
             clustering_transform: Clustering transformation to apply
             modular_transform: Modular transformation to apply
             quantization_transform: Quantization transformation to apply
+            lowrank_transform: Low-rank square matrix transformation to apply
             cache_transformed: Whether to cache transformed data
             batch_size: Batch size for transformation (when caching)
         """
@@ -588,6 +796,7 @@ class TransformedDataset(Dataset):
         self.clustering_transform = clustering_transform
         self.modular_transform = modular_transform
         self.quantization_transform = quantization_transform
+        self.lowrank_transform = lowrank_transform
         self.cache_transformed = cache_transformed
         self.transformed_cache = {}
         
@@ -597,7 +806,8 @@ class TransformedDataset(Dataset):
             nonlinear_transform is not None,
             clustering_transform is not None,
             modular_transform is not None,
-            quantization_transform is not None
+            quantization_transform is not None,
+            lowrank_transform is not None
         ])
         if cache_transformed and transforms_exist:
             self._cache_all_transformations(batch_size)
@@ -646,6 +856,10 @@ class TransformedDataset(Dataset):
                 if self.quantization_transform is not None:
                     batch_input_ids = self.quantization_transform.forward_batch(batch_input_ids)
                     batch_labels = self.quantization_transform.forward_batch(batch_labels)
+                    
+                if self.lowrank_transform is not None:
+                    batch_input_ids = self.lowrank_transform.forward_batch(batch_input_ids)
+                    batch_labels = self.lowrank_transform.forward_batch(batch_labels)
                 
                 # Store in cache
                 for i, idx in enumerate(range(start_idx, end_idx)):
@@ -692,6 +906,10 @@ class TransformedDataset(Dataset):
             input_ids = self.quantization_transform(input_ids)
             labels = self.quantization_transform(labels)
             
+        if self.lowrank_transform is not None:
+            input_ids = self.lowrank_transform(input_ids)
+            labels = self.lowrank_transform(labels)
+            
         return {
             "input_ids": input_ids,
             "labels": labels,
@@ -708,8 +926,10 @@ def create_transformed_dataloaders(
     num_workers: int = 4,
     linear_transform_dim: Optional[int] = None,
     linear_seed: int = 42,
+    nonlinear_hidden_dims: Optional[List[int]] = None,
     nonlinear_type: str = "tanh",
-    nonlinear_scale: float = 0.1,
+    nonlinear_dropout_rate: float = 0.1,
+    nonlinear_noise_scale: float = 0.1,
     nonlinear_seed: int = 43,
     clustering_num_clusters: Optional[int] = None,
     clustering_embedding_dim: int = 128,
@@ -719,11 +939,14 @@ def create_transformed_dataloaders(
     quantization_num_levels: Optional[int] = None,
     quantization_embedding_dim: int = 64,
     quantization_seed: int = 46,
+    lowrank_rank: Optional[int] = None,
+    lowrank_seed: int = 47,
     apply_linear: bool = True,
     apply_nonlinear: bool = True,
     apply_clustering: bool = False,
     apply_modular: bool = False,
     apply_quantization: bool = False,
+    apply_lowrank: bool = False,
 ) -> tuple:
     """
     Create transformed dataloaders.
@@ -738,8 +961,10 @@ def create_transformed_dataloaders(
         num_workers: Number of data loading workers
         linear_transform_dim: Dimension of linear transformation
         linear_seed: Seed for linear transformation
+        nonlinear_hidden_dims: Hidden layer dimensions for nonlinear transformation
         nonlinear_type: Type of nonlinear transformation
-        nonlinear_scale: Scale for nonlinear transformation
+        nonlinear_dropout_rate: Dropout rate for nonlinear transformation
+        nonlinear_noise_scale: Noise scale for nonlinear transformation
         nonlinear_seed: Seed for nonlinear transformation
         clustering_num_clusters: Number of clusters for clustering transform
         clustering_embedding_dim: Embedding dimension for clustering
@@ -749,11 +974,14 @@ def create_transformed_dataloaders(
         quantization_num_levels: Number of quantization levels
         quantization_embedding_dim: Embedding dimension for quantization
         quantization_seed: Seed for quantization transformation
+        lowrank_rank: Rank for low-rank square matrix transformation
+        lowrank_seed: Seed for low-rank transformation
         apply_linear: Whether to apply linear transformation
         apply_nonlinear: Whether to apply nonlinear transformation
         apply_clustering: Whether to apply clustering transformation
         apply_modular: Whether to apply modular transformation
         apply_quantization: Whether to apply quantization transformation
+        apply_lowrank: Whether to apply low-rank transformation
     
     Returns:
         Tuple of (train_loader, valid_loader, test_loader, transforms_dict)
@@ -764,6 +992,7 @@ def create_transformed_dataloaders(
     clustering_transform = None
     modular_transform = None
     quantization_transform = None
+    lowrank_transform = None
     
     if apply_linear:
         linear_transform = LinearTransform(
@@ -777,8 +1006,10 @@ def create_transformed_dataloaders(
     if apply_nonlinear:
         nonlinear_transform = NonLinearTransform(
             vocab_size=vocab_size,
+            hidden_dims=nonlinear_hidden_dims,
             nonlinear_type=nonlinear_type,
-            scale=nonlinear_scale,
+            dropout_rate=nonlinear_dropout_rate,
+            noise_scale=nonlinear_noise_scale,
             seed=nonlinear_seed,
         )
         # Move transformation to CPU for data loading
@@ -813,6 +1044,15 @@ def create_transformed_dataloaders(
         # Move transformation to CPU for data loading
         quantization_transform = quantization_transform.cpu()
     
+    if apply_lowrank and lowrank_rank is not None:
+        lowrank_transform = LowRankSquareTransform(
+            vocab_size=vocab_size,
+            rank=lowrank_rank,
+            seed=lowrank_seed,
+        )
+        # Move transformation to CPU for data loading
+        lowrank_transform = lowrank_transform.cpu()
+    
     # Create transformed datasets with caching enabled
     train_dataset = TransformedDataset(
         base_train_dataset,
@@ -821,6 +1061,7 @@ def create_transformed_dataloaders(
         clustering_transform=clustering_transform,
         modular_transform=modular_transform,
         quantization_transform=quantization_transform,
+        lowrank_transform=lowrank_transform,
         cache_transformed=True,
         batch_size=1000,
     )
@@ -832,6 +1073,7 @@ def create_transformed_dataloaders(
         clustering_transform=clustering_transform,
         modular_transform=modular_transform,
         quantization_transform=quantization_transform,
+        lowrank_transform=lowrank_transform,
         cache_transformed=True,
         batch_size=1000,
     )
@@ -843,9 +1085,15 @@ def create_transformed_dataloaders(
         clustering_transform=clustering_transform,
         modular_transform=modular_transform,
         quantization_transform=quantization_transform,
+        lowrank_transform=lowrank_transform,
         cache_transformed=True,
         batch_size=1000,
     )
+    
+    # Check for empty datasets
+    if len(train_dataset) == 0:
+        raise ValueError(f"Train dataset is empty. Dataset size: {max_tokens_train}, "
+                        f"sequences prepared: {len(train_dataset)}")
     
     # Create dataloaders
     train_loader = DataLoader(
@@ -857,6 +1105,12 @@ def create_transformed_dataloaders(
         persistent_workers=True if num_workers > 0 else False,
     )
     
+    # Check for empty validation dataset
+    if len(valid_dataset) == 0:
+        print(f"Warning: Validation dataset is empty, creating minimal dataset")
+        # Use a small subset of training data for validation
+        valid_dataset = train_dataset
+    
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=eval_batch_size,
@@ -865,6 +1119,12 @@ def create_transformed_dataloaders(
         pin_memory=True,
         persistent_workers=True if num_workers > 0 else False,
     )
+    
+    # Check for empty test dataset
+    if len(test_dataset) == 0:
+        print(f"Warning: Test dataset is empty, creating minimal dataset")
+        # Use a small subset of training data for testing
+        test_dataset = train_dataset
     
     test_loader = DataLoader(
         test_dataset,
@@ -882,6 +1142,7 @@ def create_transformed_dataloaders(
         'clustering': clustering_transform,
         'modular': modular_transform,
         'quantization': quantization_transform,
+        'lowrank': lowrank_transform,
     }
     
     return train_loader, valid_loader, test_loader, transforms_dict 

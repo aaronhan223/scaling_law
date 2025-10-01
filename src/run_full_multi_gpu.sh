@@ -12,7 +12,8 @@ echo "This script will run experiments using multiple GPUs:"
 echo "- Standard experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
 echo "- Linear transform experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
 echo "- Nonlinear transform experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
-echo "- Total: 108 experiments"
+echo "- Low-rank transform experiments: 6 model sizes × 6 dataset sizes = 36 experiments"
+echo "- Total: 144 experiments"
 echo ""
 echo "Model configurations (with reduced dataset sizes for memory efficiency):"
 echo "  0: ~700K params  (128 hidden, 2 layers, 4 heads)"
@@ -28,6 +29,7 @@ echo "Experiment types:"
 echo "  - Standard: No transformations applied"
 echo "  - Linear: Only linear token transformations applied"
 echo "  - Nonlinear: Only nonlinear token transformations applied"
+echo "  - Low-rank: Only low-rank square matrix transformations applied"
 echo ""
 
 # Check available GPUs
@@ -40,7 +42,7 @@ echo ""
 # - Use GPUs 0 and 1: CUDA_VISIBLE_DEVICES=0,1
 # - Use GPUs 2 and 3: CUDA_VISIBLE_DEVICES=2,3
 # - Use all 4 GPUs: CUDA_VISIBLE_DEVICES=0,1,2,3
-GPU_DEVICES="${GPU_DEVICES:-0,1}"  # Default to GPUs 0 and 1, override with environment variable
+GPU_DEVICES="${GPU_DEVICES:-0,1,2,3}"  # Default to GPUs 0 and 1, override with environment variable
 
 echo "Using GPUs: $GPU_DEVICES"
 echo ""
@@ -54,24 +56,25 @@ echo "Starting multi-GPU comprehensive scaling law experiments..."
 
 # Run with specified GPUs
 # Note: With multi-GPU, we can use larger batch sizes for better efficiency
-# Running standard, linear, and nonlinear experiments (skipping combined transformed)
+# Running standard, linear, nonlinear, and low-rank experiments (skipping combined transformed)
 CUDA_VISIBLE_DEVICES=$GPU_DEVICES python main.py \
-    --experiment-name scaling_laws_full_multi_gpu \
+    --experiment-name scaling_laws_test_alpha \
     --model-sizes 0,1,2,3,4 \
-    --dataset-sizes 3M,10M,30M,100M,300M,1B,3B \
-    --dataset-name openwebtext \
-    --wandb-project scaling-laws-r42 \
+    --dataset-sizes 100K,300K,1M,3M,10M,30M,100M \
+    --dataset-name wikitext \
+    --wandb-project scaling-laws-r41 \
     --batch-size 4 \
     --eval-steps 500 \
     --warmup-steps 1000 \
     --learning-rate 5e-4 \
     --multi-gpu \
     --run-standard \
-    --run-linear \
-    --run-nonlinear \
-    --run-clustering \
-    --run-modular \
-    --run-quantization \
+    --skip-linear \
+    --skip-nonlinear \
+    --skip-lowrank \
+    --skip-clustering \
+    --skip-modular \
+    --skip-quantization \
     --skip-transformed 
 
 echo ""
@@ -83,5 +86,7 @@ echo "Generated plots will include:"
 echo "  - standard_*.png: Standard experiment plots"
 echo "  - linear_*.png: Linear transform experiment plots" 
 echo "  - nonlinear_*.png: Nonlinear transform experiment plots"
+echo "  - lowrank_*.png: Low-rank transform experiment plots"
 echo "  - comparison_linear.png: Standard vs Linear comparison"
-echo "  - comparison_nonlinear.png: Standard vs Nonlinear comparison" 
+echo "  - comparison_nonlinear.png: Standard vs Nonlinear comparison"
+echo "  - comparison_lowrank.png: Standard vs Low-rank comparison" 

@@ -37,6 +37,7 @@ class CustomDataset(Dataset):
             dataset_obj: Optional pre-loaded dataset object
         """
         self.split = split
+        self.dataset_name = dataset_name
         self.max_length = max_length
         self.max_tokens = max_tokens
         self.seed = seed
@@ -63,6 +64,16 @@ class CustomDataset(Dataset):
         """Tokenize and prepare the dataset."""
         print(f"Tokenizing {self.split} split...")
         
+        # Use different strategies based on dataset type
+        if self.dataset_name == 'openwebtext':
+            # New chunking approach for OpenWebText (longer texts)
+            self._prepare_data_chunking()
+        else:
+            # Original concatenation approach for WikiText and other datasets
+            self._prepare_data_concatenation()
+    
+    def _prepare_data_chunking(self):
+        """Tokenize and chunk data (for OpenWebText)."""
         self.sequences = []
         for example in tqdm(self.dataset, desc="Tokenizing and chunking"):
             text = example["text"]
@@ -85,10 +96,81 @@ class CustomDataset(Dataset):
                     indices.sort()
                     self.sequences = [self.sequences[i] for i in indices]
 
+        # Safety check: ensure we have at least some sequences
+        if len(self.sequences) == 0:
+            print(f"Warning: No sequences found for {self.split} split. Creating minimal sequences.")
+            # Create a few minimal sequences with padding
+            pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
+            minimal_sequence = [pad_token_id] * (self.max_length + 1)
+            self.sequences = [minimal_sequence] * max(1, 10)  # At least 10 sequences
+
         self.sequences = torch.tensor(self.sequences, dtype=torch.long)
         
         print(f"Prepared {len(self.sequences)} sequences of length {self.max_length}")
         print(f"Total tokens in prepared sequences: {len(self.sequences) * self.max_length:,}")
+    
+    def _prepare_data_concatenation(self):
+        """Tokenize and concatenate data (for WikiText and other datasets)."""
+        # Tokenize all texts
+        all_token_ids = []
+        
+        for example in tqdm(self.dataset, desc="Tokenizing"):
+            text = example["text"]
+            if text.strip():  # Skip empty texts
+                tokens = self.tokenizer.encode(text, add_special_tokens=False)
+                all_token_ids.extend(tokens)
+        
+        # Safety check: ensure we have enough tokens
+        if len(all_token_ids) < self.max_length + 1:
+            print(f"Warning: Not enough tokens ({len(all_token_ids)}) for sequence length {self.max_length}. Padding with EOS tokens.")
+            pad_token_id = self.tokenizer.eos_token_id
+            all_token_ids.extend([pad_token_id] * (self.max_length + 1 - len(all_token_ids)))
+        
+        # Convert to numpy array for efficient slicing
+        all_token_ids = np.array(all_token_ids)
+        
+        # Limit tokens if specified
+        if self.max_tokens is not None and len(all_token_ids) > self.max_tokens:
+            np.random.seed(self.seed)
+            # For training, take first max_tokens
+            # For validation/test, sample randomly but consistently
+            if self.split == "train":
+                all_token_ids = all_token_ids[:self.max_tokens]
+            else:
+                # Sample a subset for validation/test
+                if len(all_token_ids) >= self.max_tokens:
+                    indices = np.random.choice(len(all_token_ids), self.max_tokens, replace=False)
+                    indices.sort()  # Keep order
+                    all_token_ids = all_token_ids[indices]
+        
+        # Create sequences of max_length
+        self.sequences = []
+        for i in range(0, len(all_token_ids) - self.max_length, self.max_length):
+            self.sequences.append(all_token_ids[i:i + self.max_length + 1])
+
+        # Safety check: ensure we have at least some sequences
+        if len(self.sequences) == 0:
+            if len(all_token_ids) >= self.max_length + 1:
+                # Create at least one sequence from the available tokens
+                self.sequences.append(all_token_ids[:self.max_length + 1])
+            else:
+                # If we don't have enough tokens, create minimal sequences
+                print(f"Warning: Only {len(all_token_ids)} tokens available, less than required sequence length {self.max_length + 1}")
+                print("Creating minimal sequences with padding...")
+                # Create a minimal sequence by padding
+                pad_token_id = 50256  # GPT-2 pad token
+                if len(all_token_ids) > 0:
+                    # Use available tokens and pad the rest
+                    minimal_sequence = list(all_token_ids) + [pad_token_id] * (self.max_length + 1 - len(all_token_ids))
+                else:
+                    # Create completely synthetic sequence
+                    minimal_sequence = [pad_token_id] * (self.max_length + 1)
+                self.sequences = [minimal_sequence] * max(1, 10)  # At least 10 sequences
+
+        self.sequences = torch.tensor(self.sequences, dtype=torch.long)
+        
+        print(f"Prepared {len(self.sequences)} sequences of length {self.max_length}")
+        print(f"Total tokens: {len(all_token_ids):,}")
         
     def __len__(self):
         return len(self.sequences)

@@ -255,7 +255,11 @@ def plot_loss_vs_compute(
     if 'petaflop_days' not in df.columns:
         # Estimate compute from model parameters and dataset size
         print("Warning: No compute tracking data found. Estimating compute from model parameters and dataset size.")
-        from ..experiments.compute_tracker import estimate_compute_for_model
+        try:
+            from experiments.compute_tracker import estimate_compute_for_model
+        except ImportError:
+            print("Warning: compute_tracker not available, skipping compute estimation")
+            return None
         
         df = df.copy()
         df['petaflop_days'] = df.apply(
@@ -374,7 +378,11 @@ def plot_optimal_model_size(
     if 'petaflop_days' not in df.columns:
         # Estimate compute from model parameters and dataset size
         print("Warning: No compute tracking data found. Estimating compute from model parameters and dataset size.")
-        from ..experiments.compute_tracker import estimate_compute_for_model
+        try:
+            from experiments.compute_tracker import estimate_compute_for_model
+        except ImportError:
+            print("Warning: compute_tracker not available, skipping compute estimation")
+            return None
         
         df = df.copy()
         df['petaflop_days'] = df.apply(

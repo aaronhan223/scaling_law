@@ -256,17 +256,21 @@ class TransformerLM(nn.Module):
             
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
+            
+            # Ensure shift_labels is long type for cross_entropy
+            shift_labels = shift_labels.long()
+            
             loss = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
                 ignore_index=-100,
             )
             outputs["loss"] = loss
-            
+
             # Calculate perplexity
             with torch.no_grad():
                 outputs["perplexity"] = torch.exp(loss)
-        
+
         return outputs
     
     def get_num_params(self) -> int:

@@ -200,7 +200,9 @@ class ScalingLawExperiment:
                     linear_transform_dim=self.config.transform_config.linear_transform_dim,
                     linear_seed=self.config.transform_config.linear_transform_seed,
                     nonlinear_type=self.config.transform_config.nonlinear_type,
-                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
+                    nonlinear_hidden_dims=self.config.transform_config.nonlinear_hidden_dims,
+                    nonlinear_dropout_rate=self.config.transform_config.nonlinear_dropout_rate,
+                    nonlinear_noise_scale=self.config.transform_config.nonlinear_noise_scale,
                     nonlinear_seed=self.config.transform_config.nonlinear_seed,
                 )
             elif experiment_type == "linear":
@@ -216,7 +218,6 @@ class ScalingLawExperiment:
                     linear_transform_dim=self.config.transform_config.linear_transform_dim,
                     linear_seed=self.config.transform_config.linear_transform_seed,
                     nonlinear_type=self.config.transform_config.nonlinear_type,
-                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
                     nonlinear_seed=self.config.transform_config.nonlinear_seed,
                     apply_linear=True,
                     apply_nonlinear=False,
@@ -234,7 +235,9 @@ class ScalingLawExperiment:
                     linear_transform_dim=self.config.transform_config.linear_transform_dim,
                     linear_seed=self.config.transform_config.linear_transform_seed,
                     nonlinear_type=self.config.transform_config.nonlinear_type,
-                    nonlinear_scale=self.config.transform_config.nonlinear_scale,
+                    nonlinear_hidden_dims=self.config.transform_config.nonlinear_hidden_dims,
+                    nonlinear_dropout_rate=self.config.transform_config.nonlinear_dropout_rate,
+                    nonlinear_noise_scale=self.config.transform_config.nonlinear_noise_scale,
                     nonlinear_seed=self.config.transform_config.nonlinear_seed,
                     apply_linear=False,
                     apply_nonlinear=True,
@@ -289,6 +292,25 @@ class ScalingLawExperiment:
                     apply_nonlinear=False,
                     apply_quantization=True,
                 )
+            elif experiment_type == "lowrank":
+                # Get default parameters for low-rank transformation
+                lossy_params = self.config.transform_config.get_default_lossy_params(self.config.model_config.vocab_size)
+                
+                # Create dataloaders with only low-rank transformation
+                train_loader, valid_loader, test_loader, _ = create_transformed_dataloaders(
+                    base_train_dataset=train_dataset,
+                    base_valid_dataset=valid_dataset,
+                    base_test_dataset=test_dataset,
+                    vocab_size=self.config.model_config.vocab_size,
+                    train_batch_size=self.config.data_config.train_batch_size,
+                    eval_batch_size=self.config.data_config.eval_batch_size,
+                    num_workers=self.config.data_config.num_workers,
+                    lowrank_rank=lossy_params['lowrank_rank'],
+                    lowrank_seed=self.config.transform_config.lowrank_seed,
+                    apply_linear=False,
+                    apply_nonlinear=False,
+                    apply_lowrank=True,
+                )
             else:
                 raise ValueError(f"Unknown experiment type: {experiment_type}")
         
@@ -297,11 +319,11 @@ class ScalingLawExperiment:
         print(f"Created model with {model.get_num_params():,} parameters")
         
         # Calculate training steps
-        max_steps = self.config.training_config.get_max_steps_for_tokens(
+        max_steps = int(self.config.training_config.get_max_steps_for_tokens(
             dataset_size,
             self.config.data_config.train_batch_size,
             self.config.data_config.max_length,
-        )
+        ))
         
         # Create compute tracker
         compute_tracker = None
@@ -350,6 +372,12 @@ class ScalingLawExperiment:
             use_multi_gpu=self.config.multi_gpu,
         )
         
+        # Enable memory efficient training for quantization, low-rank and large models
+        # if (experiment_type in ["quantization", "lowrank"] or 
+        #     model_config['num_parameters'] > 5e6 or 
+        #     dataset_size > 5e5):
+        #     trainer.enable_memory_efficient_training()
+        
         # Train model
         train_results = trainer.train()
         
@@ -392,7 +420,8 @@ class ScalingLawExperiment:
             self.config.run_nonlinear_transform,
             self.config.run_clustering_transform,
             self.config.run_modular_transform,
-            self.config.run_quantization_transform
+            self.config.run_quantization_transform,
+            self.config.run_lowrank_transform
         ])
         if num_experiments > 1:
             print("\n" + "="*80)
@@ -562,6 +591,29 @@ class ScalingLawExperiment:
                     # Save intermediate results
                     self.save_results()
         
+        # Run low-rank transform experiments
+        if self.config.run_lowrank_transform:
+            print("\n" + "="*80)
+            print("RUNNING LOW-RANK TRANSFORM EXPERIMENTS")
+            print("="*80)
+            
+            for model_config in model_configs:
+                for dataset_size in dataset_sizes:
+                    # Skip very large model/dataset combinations to save compute
+                    if model_config['num_parameters'] > 1e8 and dataset_size > 1e8:
+                        print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} tokens")
+                        continue
+                    
+                    result = self.run_single_experiment(
+                        model_config=model_config,
+                        dataset_size=dataset_size,
+                        experiment_type="lowrank",
+                    )
+                    self.results.append(result)
+                    
+                    # Save intermediate results
+                    self.save_results()
+        
         # Clear dataset cache to free memory
         self.dataset_cache.clear()
         
@@ -600,6 +652,7 @@ class ScalingLawExperiment:
         clustering_df = df[df['experiment_type'] == 'clustering'].copy() if 'clustering' in df['experiment_type'].values else pd.DataFrame()
         modular_df = df[df['experiment_type'] == 'modular'].copy() if 'modular' in df['experiment_type'].values else pd.DataFrame()
         quantization_df = df[df['experiment_type'] == 'quantization'].copy() if 'quantization' in df['experiment_type'].values else pd.DataFrame()
+        lowrank_df = df[df['experiment_type'] == 'lowrank'].copy() if 'lowrank' in df['experiment_type'].values else pd.DataFrame()
         
         return {
             "all": df,
@@ -610,4 +663,5 @@ class ScalingLawExperiment:
             "clustering": clustering_df,
             "modular": modular_df,
             "quantization": quantization_df,
+            "lowrank": lowrank_df,
         } 

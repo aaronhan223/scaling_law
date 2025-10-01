@@ -200,3 +200,9 @@ wandb/
 outputs/
 
 docs/
+deprecated/
+test_cache/
+outputs/
+outputs_speech/
+outputs_speech_quantization/
+dataset_cache/
