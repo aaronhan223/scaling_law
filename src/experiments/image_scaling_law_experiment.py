@@ -44,6 +44,10 @@ class ImageScalingLawExperiment:
         """Get vision model configurations based on experiment config."""
         all_configs = get_vision_model_configs()
 
+        # Update num_classes in all configs to match experiment config
+        for config in all_configs:
+            config['num_classes'] = self.num_classes
+
         # Filter based on experiment config if specified
         if hasattr(self.config, 'model_indices') and self.config.model_indices:
             selected_configs = [all_configs[i] for i in self.config.model_indices if i < len(all_configs)]
@@ -307,7 +311,7 @@ class ImageScalingLawExperiment:
             for model_config in model_configs:
                 for dataset_size in dataset_sizes:
                     # Skip very large combinations to save compute
-                    if model_config['num_parameters'] > 100e6 and dataset_size > 100000:
+                    if model_config['num_parameters'] > 100e6 and dataset_size > 300000:
                         print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} samples")
                         continue
 
