@@ -24,7 +24,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv 2>/dev/null || echo 
 echo ""
 
 # GPU configuration
-GPU_DEVICES="${GPU_DEVICES:-0,1,2,3}"  # Default to GPUs 0,1, override with environment variable
+GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"  # Default to GPUs 0,1, override with environment variable
 
 echo "Using GPUs: $GPU_DEVICES"
 echo ""
@@ -34,7 +34,7 @@ echo ""
 # Configuration options
 MIN_LEVELS="${MIN_LEVELS:-2}"
 MAX_LEVELS="${MAX_LEVELS:-256}"
-NUM_LEVELS="${NUM_LEVELS:-4}"
+NUM_LEVELS="${NUM_LEVELS:-8}"
 MODEL_SIZES="${MODEL_SIZES:-0,1,2,3}"
 DATASET_SIZES="${DATASET_SIZES:-1K,5K,10K,50K,100K}"
 BATCH_SIZE="${BATCH_SIZE:-256}"

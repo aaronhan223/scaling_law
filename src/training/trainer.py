@@ -189,11 +189,12 @@ class Trainer:
             # Move batch to device
             batch = {k: v.to(self.device) for k, v in batch.items()}
             
-            # Safety check: ensure token IDs are within valid range
+            # Safety check: ensure token IDs are within valid range (text models only)
             if "input_ids" in batch:
                 batch["input_ids"] = torch.clamp(batch["input_ids"], 0, 50256)
-            if "labels" in batch:
-                batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
+                # For text models, labels can include -100 (ignore index)
+                if "labels" in batch:
+                    batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
             # Forward pass
             if self.fp16:
                 with autocast('cuda'):
@@ -394,11 +395,12 @@ class Trainer:
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
             batch = {k: v.to(self.device) for k, v in batch.items()}
 
-            # Safety check: ensure token IDs are within valid range (for text models)
+            # Safety check: ensure token IDs are within valid range (text models only)
             if "input_ids" in batch:
                 batch["input_ids"] = torch.clamp(batch["input_ids"], 0, 50256)
-            if "labels" in batch:
-                batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
+                # For text models, labels can include -100 (ignore index)
+                if "labels" in batch:
+                    batch["labels"] = torch.clamp(batch["labels"], -100, 50256)
 
             try:
                 if self.fp16:

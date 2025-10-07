@@ -17,7 +17,7 @@ from data.imagenet_dataset import (
     parse_imagenet_size
 )
 from data.image_transforms import create_image_transform
-from training import Trainer, set_seed
+from training import Trainer, ImageTrainer, set_seed
 
 
 class ImageScalingLawExperiment:
@@ -42,7 +42,11 @@ class ImageScalingLawExperiment:
 
     def _get_vision_model_configs(self) -> List[Dict[str, Any]]:
         """Get vision model configurations based on experiment config."""
+        import copy
         all_configs = get_vision_model_configs()
+
+        # Make deep copies to avoid mutating the original configs
+        all_configs = [copy.deepcopy(config) for config in all_configs]
 
         # Update num_classes in all configs to match experiment config
         for config in all_configs:
@@ -87,7 +91,7 @@ class ImageScalingLawExperiment:
                     max_samples_train=max_samples_train,
                     max_samples_val=max_samples_val,
                     max_samples_test=max_samples_test,
-                    num_classes=None,  # Use all classes
+                    num_classes=self.num_classes if self.num_classes < 1000 else None,
                     seed=self.config.training_config.seed,
                     normalize=True,
                     pin_memory=True,
@@ -106,7 +110,7 @@ class ImageScalingLawExperiment:
                     max_samples_train=max_samples_train,
                     max_samples_val=max_samples_val,
                     max_samples_test=max_samples_test,
-                    num_classes=None,
+                    num_classes=self.num_classes if self.num_classes < 1000 else None,
                     seed=self.config.training_config.seed,
                     normalize=True,
                     pin_memory=True,
@@ -196,6 +200,20 @@ class ImageScalingLawExperiment:
         # Create vision model
         model = create_vision_model(model_config)
         print(f"Created vision model with {model.get_num_params():,} parameters")
+        print(f"Model num_classes: {model.num_classes}")
+
+        # Validate that dataset labels match model num_classes
+        print("\nValidating dataset labels...")
+        sample_batch = next(iter(train_loader))
+        sample_labels = sample_batch['labels']
+        print(f"Sample batch labels - min: {sample_labels.min().item()}, max: {sample_labels.max().item()}")
+        print(f"Sample batch has {len(torch.unique(sample_labels))} unique classes")
+
+        if sample_labels.max().item() >= model.num_classes:
+            raise ValueError(
+                f"Dataset has labels up to {sample_labels.max().item()} but model only has "
+                f"{model.num_classes} classes. Labels must be in range [0, {model.num_classes-1}]"
+            )
 
         # Calculate training steps for images (different from text)
         # For images, we typically train for epochs rather than tokens
@@ -231,7 +249,7 @@ class ImageScalingLawExperiment:
 
         # Create trainer with image-specific settings
         wandb_run_name = f"image_{experiment_type}_{model_config['model_name']}_data{dataset_size}"
-        trainer = Trainer(
+        trainer = ImageTrainer(
             model=model,
             train_dataloader=train_loader,
             eval_dataloader=val_loader,
@@ -311,7 +329,7 @@ class ImageScalingLawExperiment:
             for model_config in model_configs:
                 for dataset_size in dataset_sizes:
                     # Skip very large combinations to save compute
-                    if model_config['num_parameters'] > 100e6 and dataset_size > 300000:
+                    if model_config['num_parameters'] > 100e6 and dataset_size > 100000:
                         print(f"Skipping large combination: {model_config['model_name']} with {dataset_size} samples")
                         continue
 

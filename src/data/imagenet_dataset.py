@@ -150,8 +150,32 @@ class ImageNetDataset(Dataset):
             raise ValueError(f"Split path does not exist: {split_path}")
 
         self.dataset = ImageFolder(split_path)
-        self.classes = self.dataset.classes
-        self.class_to_idx = self.dataset.class_to_idx
+
+        # Filter out non-ImageNet class folders (e.g., tar files, meta files)
+        # ImageNet classes follow the pattern n######## (8 digits)
+        import re
+        valid_classes = []
+        valid_class_to_idx = {}
+        imagenet_pattern = re.compile(r'^n\d{8}$')
+
+        for class_name, class_idx in self.dataset.class_to_idx.items():
+            if imagenet_pattern.match(class_name):
+                new_idx = len(valid_classes)
+                valid_classes.append(class_name)
+                valid_class_to_idx[class_name] = new_idx
+
+        # Filter samples to only include valid ImageNet classes and remap indices
+        filtered_samples = []
+        for path, old_idx in self.dataset.samples:
+            class_name = self.dataset.classes[old_idx]
+            if class_name in valid_class_to_idx:
+                new_idx = valid_class_to_idx[class_name]
+                filtered_samples.append((path, new_idx))
+
+        self.dataset.samples = filtered_samples
+        self.dataset.targets = [s[1] for s in filtered_samples]
+        self.classes = valid_classes
+        self.class_to_idx = valid_class_to_idx
 
         # Filter classes if specified
         if class_subset is not None:
