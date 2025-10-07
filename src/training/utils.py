@@ -89,31 +89,41 @@ def save_checkpoint(
 ):
     """Save training checkpoint."""
     os.makedirs(save_dir, exist_ok=True)
-    
+
     # Handle DataParallel models
     model_to_save = model.module if hasattr(model, 'module') else model
-    
+
     checkpoint = {
         "model_state_dict": model_to_save.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "step": step,
         "best_loss": best_loss,
     }
-    
+
     if scheduler is not None:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
-    
+
     # Add any additional kwargs
     checkpoint.update(kwargs)
-    
-    checkpoint_path = os.path.join(save_dir, f"checkpoint-{step}.pt")
-    torch.save(checkpoint, checkpoint_path)
-    
-    # Also save as latest
+
+    # Save only as latest to conserve disk space
     latest_path = os.path.join(save_dir, "checkpoint-latest.pt")
-    torch.save(checkpoint, latest_path)
-    
-    return checkpoint_path
+
+    # Use atomic write: save to temp file first, then rename
+    temp_path = os.path.join(save_dir, f"checkpoint-{step}-temp.pt")
+    try:
+        torch.save(checkpoint, temp_path)
+        # Remove old checkpoint before renaming to avoid doubling space usage
+        if os.path.exists(latest_path):
+            os.remove(latest_path)
+        os.rename(temp_path, latest_path)
+    except Exception as e:
+        # Clean up temp file if save failed
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise e
+
+    return latest_path
 
 
 def load_checkpoint(

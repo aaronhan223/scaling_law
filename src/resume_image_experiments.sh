@@ -42,7 +42,7 @@ echo "ImageNet data found at: $IMAGENET_PATH"
 echo ""
 
 # Default GPU configuration
-GPU_DEVICES="${GPU_DEVICES:-0,1,2,3}"
+GPU_DEVICES="${GPU_DEVICES:-0,1,2,3,4,5,6,7}"
 echo "Using GPUs: $GPU_DEVICES"
 echo ""
 
@@ -120,16 +120,16 @@ fi
 # Phase 2: Complete remaining nonlinear experiments
 echo "PHASE 2: Completing nonlinear experiments..."
 
-echo "Running nonlinear - vit_small with 300K dataset..."
-run_experiment "nonlinear" "1" "100K,300K" "Nonlinear Experiments - VIT Small 300K"
+# echo "Running nonlinear - vit_small with 300K dataset..."
+# run_experiment "nonlinear" "1" "100K,300K" "Nonlinear Experiments - VIT Small 300K"
 
-if [ $? -ne 0 ]; then
-    echo "Phase 2a failed. Stopping execution."
-    exit 1
-fi
+# if [ $? -ne 0 ]; then
+#     echo "Phase 2a failed. Stopping execution."
+#     exit 1
+# fi
 
 echo "Running nonlinear - vit_base with all dataset sizes..."
-run_experiment "nonlinear" "2" "1K,3K,10K,30K,100K,300K" "Nonlinear Experiments - VIT Base All Sizes"
+run_experiment "nonlinear" "2" "100K,300K" "Nonlinear Experiments - VIT Base All Sizes"
 
 if [ $? -ne 0 ]; then
     echo "Phase 2b failed. Stopping execution."
